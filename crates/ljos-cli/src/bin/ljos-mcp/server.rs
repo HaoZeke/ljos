@@ -565,6 +565,18 @@ pub struct PolicyRow {
     pub note: String,
 }
 
+/// The thread a call names in its `_meta`: a `thread_id` at the top, or in
+/// any object the runner keys its own metadata under.
+fn thread_in_meta(meta: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
+    let id = |v: &serde_json::Value| {
+        v.get("thread_id")
+            .and_then(|t| t.as_str())
+            .map(String::from)
+    };
+    id(&serde_json::Value::Object(meta.clone()))
+        .or_else(|| meta.values().filter(|v| v.is_object()).find_map(id))
+}
+
 fn said(out: ljos_cli::Said) -> Json<Said> {
     let aside = out.stderr.trim();
     Json(Said {
@@ -1904,6 +1916,20 @@ impl ServerHandler for LjosServer {
         )
     }
 
+    /// One tool call, held as the thread the call names in its `_meta`
+    /// when the runner names one there: a runner that serves many
+    /// conversations from one server puts no conversation id in the
+    /// server's environment.
+    async fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::CallToolResponse, McpError> {
+        let thread = thread_in_meta(&context.meta.0);
+        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        ljos_cli::as_thread(thread, Self::tool_router().call(tcc)).await
+    }
+
     /// The client has said who it is: name the seat after it and leave the
     /// record a shell below the same runner reads.
     async fn on_initialized(&self, context: rmcp::service::NotificationContext<rmcp::RoleServer>) {
@@ -1981,6 +2007,26 @@ fn card_named(uri: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_call_names_its_thread_in_the_meta() {
+        let meta = |v: serde_json::Value| v.as_object().unwrap().clone();
+        assert_eq!(
+            thread_in_meta(&meta(serde_json::json!({
+                "progressToken": 1,
+                "x-runner-turn-metadata": {"session_id": "s-1", "thread_id": "0199a1b2-thread"}
+            }))),
+            Some("0199a1b2-thread".to_string())
+        );
+        assert_eq!(
+            thread_in_meta(&meta(serde_json::json!({"thread_id": "top-level-thread"}))),
+            Some("top-level-thread".to_string())
+        );
+        assert_eq!(
+            thread_in_meta(&meta(serde_json::json!({"progressToken": 1}))),
+            None
+        );
+    }
 
     /// Every tool is annotated, and the writers are the ones the contract names.
     #[test]

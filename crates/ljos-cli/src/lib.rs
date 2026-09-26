@@ -310,9 +310,13 @@ fn session_actor() -> Option<(String, String)> {
 }
 
 /// A conversation id the runner stamped, not the login (`XDG_SESSION_ID`
-/// is a small integer). Values shorter than eight characters are ignored.
+/// is a small integer): a `*_SESSION_ID`, or a `*_THREAD_ID` from a runner
+/// that names its conversations threads. Values shorter than eight
+/// characters are ignored.
 fn runner_session_var(key: &str, val: &str) -> bool {
-    key.ends_with("_SESSION_ID") && key != "XDG_SESSION_ID" && val.trim().len() >= 8
+    (key.ends_with("_SESSION_ID") || key.ends_with("_THREAD_ID"))
+        && key != "XDG_SESSION_ID"
+        && val.trim().len() >= 8
 }
 
 fn session_from_value(key: &str, raw: &str) -> (String, String) {
@@ -457,10 +461,14 @@ fn session_record_path(id: &str) -> PathBuf {
 /// started from that terminal; the ids line is how a reader tells its own
 /// conversation's record from another's filed under the same shared id.
 fn write_record(path: &Path, seat: &Seat) {
+    let ids: Vec<String> = stamped_sessions().into_iter().map(|(_, id)| id).collect();
+    write_record_ids(path, seat, &ids);
+}
+
+fn write_record_ids(path: &Path, seat: &Seat, ids: &[String]) {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let ids: Vec<String> = stamped_sessions().into_iter().map(|(_, id)| id).collect();
     let _ = std::fs::write(
         path,
         format!("{}\n{}\nids\t{}\n", seat.seat, seat.holder, ids.join("\t")),
@@ -497,13 +505,91 @@ fn record_for(text: &str, mine: &[String], source: String) -> Option<Seat> {
     })
 }
 
+/// The seat of a record another seat left under one of this process's
+/// conversation ids. A runner started from a shell of another runner
+/// inherits that runner's ids; the record they find is the parent's.
+fn inherited_record(name: &str) -> Option<Seat> {
+    stamped_sessions().into_iter().find_map(|(_, id)| {
+        read_record(&session_record_path(&id), String::new()).filter(|s| s.seat != name)
+    })
+}
+
+tokio::task_local! {
+    /// The seat of one MCP call whose runner named its thread on the call.
+    static CALL_SEAT: Seat;
+}
+
+/// Run `f` as the thread a runner named on this call, when it named one.
+/// A runner that spawns one server for many conversations names each in
+/// the call's metadata rather than in the server's environment.
+pub async fn as_thread<F: std::future::Future>(thread: Option<String>, f: F) -> F::Output {
+    match thread.filter(|t| t.trim().len() >= 8) {
+        Some(t) => CALL_SEAT.scope(seat_for_thread(&t), f).await,
+        None => f.await,
+    }
+}
+
+/// The seat for a thread a runner named on a call. The holder is the one a
+/// shell of that thread already took, found by the thread's record; else
+/// the thread id whole, recorded so the thread's shells find it.
+#[must_use]
+pub fn seat_for_thread(thread: &str) -> Seat {
+    let thread = thread.trim();
+    let seat = named_var("LJOS_SEAT")
+        .or_else(|| ANNOUNCED.get().map(|s| s.seat.clone()))
+        .unwrap_or_else(login_user);
+    let path = session_record_path(thread);
+    if let Some(holder) = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| holder_naming(&t, thread))
+    {
+        return Seat {
+            seat,
+            holder,
+            source: "the thread the runner named on this call, as its shells hold it".into(),
+        };
+    }
+    let found = Seat {
+        seat,
+        holder: thread.to_string(),
+        source: "the thread the runner named on this call".into(),
+    };
+    write_record_ids(&path, &found, &[thread.to_string()]);
+    found
+}
+
+/// The holder in a record whose ids line names `id`.
+fn holder_naming(text: &str, id: &str) -> Option<String> {
+    let mut lines = text.lines();
+    let (_, holder) = (lines.next()?, lines.next()?);
+    let ids = lines.next()?.strip_prefix("ids")?;
+    ids.split('\t')
+        .any(|i| i.trim() == id)
+        .then(|| holder.to_string())
+}
+
 /// The MCP server, once a client has said who it is: the seat is the
 /// client's name. The holder is any `*_SESSION_ID` the runner stamped,
 /// else that seat tagged with the runner's process. The record under the
 /// runtime directory is how `ljos` in a shell the same runner opened
-/// names the same seat and holder.
+/// names the same seat and holder. A runner started from another runner's
+/// shell carries that runner's ids; it holds under its own process and
+/// leaves the parent's records alone.
 pub fn announce_seat(client: &str, runner_pid: u32) -> Seat {
     let name = seat_slug(client);
+    if let Some(parent) = inherited_record(&name) {
+        let seat = Seat::tagged(
+            name,
+            &conversation_tag(runner_pid),
+            format!(
+                "the client that connected, process {runner_pid}, inside {}",
+                parent.seat
+            ),
+        );
+        write_record(&seat_record_path(runner_pid), &seat);
+        let _ = ANNOUNCED.set(seat.clone());
+        return seat;
+    }
     let seat = if let Some((holder, keys)) = session_actor() {
         Seat {
             seat: name,
@@ -530,9 +616,16 @@ pub fn announce_seat(client: &str, runner_pid: u32) -> Seat {
 
 /// Drop the records [`announce_seat`] wrote, when the server ends.
 pub fn retire_seat(runner_pid: u32) {
+    let mine = read_record(&seat_record_path(runner_pid), String::new());
     let _ = std::fs::remove_file(seat_record_path(runner_pid));
     for (_, id) in stamped_sessions() {
-        let _ = std::fs::remove_file(session_record_path(&id));
+        let path = session_record_path(&id);
+        // Another seat's record under an inherited id stays for its owner.
+        let theirs = read_record(&path, String::new())
+            .is_some_and(|r| mine.as_ref().is_some_and(|m| m.holder != r.holder));
+        if !theirs {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 
@@ -692,15 +785,10 @@ fn program_name(_pid: u32, comm: &str) -> String {
 /// when the tree ends in the session itself, which is a person at a
 /// terminal.
 fn seat_from_tree() -> Option<Seat> {
-    let chain = ancestry();
-    for (pid, _) in &chain {
-        if let Some(seat) = read_record(
-            &seat_record_path(*pid),
-            format!("the server the runner opened, process {pid}"),
-        ) {
-            return Some(seat);
-        }
+    if let Some(seat) = seat_from_tree_records() {
+        return Some(seat);
     }
+    let chain = ancestry();
     for (pid, comm) in &chain {
         let name = comm.as_str();
         if WRAPPERS.contains(&name) {
@@ -717,6 +805,18 @@ fn seat_from_tree() -> Option<Seat> {
         ));
     }
     None
+}
+
+/// The record a server left for the nearest runner above this shell. It
+/// names the runner that opened the shell, which a conversation id in the
+/// environment does not when one runner started another.
+fn seat_from_tree_records() -> Option<Seat> {
+    ancestry().into_iter().find_map(|(pid, _)| {
+        read_record(
+            &seat_record_path(pid),
+            format!("the server the runner opened, process {pid}"),
+        )
+    })
 }
 
 fn named_var(key: &str) -> Option<String> {
@@ -736,16 +836,28 @@ fn named_var(key: &str) -> Option<String> {
 /// else the seat tagged with the conversation's process.
 #[must_use]
 pub fn whoami() -> Seat {
+    if let Ok(seat) = CALL_SEAT.try_with(Clone::clone) {
+        return seat;
+    }
     let session = session_actor();
     // Both variables are a person naming the seat: the seat's own, and the
     // tracker's name for the same thing. Either beats what the tree says.
     let named = named_var("LJOS_SEAT")
         .map(|n| (n, "LJOS_SEAT"))
         .or_else(|| named_var("VISSUE_AGENT").map(|n| (n, "VISSUE_AGENT")));
+    // The record filed under a conversation id this shell carries, unless
+    // the nearest runner above left one for another seat: a runner started
+    // from another runner's shell inherits the other's ids, and its own
+    // record is the one above it.
+    let record = seat_from_session_records().map(|by_id| {
+        seat_from_tree_records()
+            .filter(|above| above.seat != by_id.seat)
+            .unwrap_or(by_id)
+    });
     let program = ANNOUNCED
         .get()
         .cloned()
-        .or_else(seat_from_session_records)
+        .or_else(|| record.clone())
         .or_else(seat_from_tree);
     let agent = named_var("VISSUE_AGENT");
     let seat_name = named
@@ -754,9 +866,9 @@ pub fn whoami() -> Seat {
         .or_else(|| program.as_ref().map(|p| p.seat.clone()))
         .or_else(|| agent.clone())
         .unwrap_or_else(login_user);
-    // The server's record by a shared conversation id first: it carries the
-    // holder the server took, whatever else this shell's environment adds.
-    if let Some(record) = seat_from_session_records() {
+    // The server's record first: it carries the holder the server took,
+    // whatever else this shell's environment adds.
+    if let Some(record) = record {
         return Seat {
             seat: seat_name,
             holder: record.holder,
@@ -9049,6 +9161,79 @@ mod tests {
         assert!(super::record_for(&ours, &shell, "t".into()).is_some());
         // A record from before the ids line is taken as it stands.
         assert!(super::record_for("acme-cli\nsess-old\n", &mine, "t".into()).is_some());
+    }
+
+    #[test]
+    fn a_runner_started_inside_another_keeps_its_own_holder() {
+        let _g = env_guard();
+        let dir = std::env::temp_dir().join(format!("ljos-nest-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        unsafe {
+            std::env::set_var("XDG_RUNTIME_DIR", &dir);
+            std::env::set_var("ACME_SESSION_ID", "01a09b25-1111-7972-881a-3cee2ea6efd6");
+        }
+        let parent = announce_seat("Acme CLI", 5151);
+        // The child inherits the parent's id and connects under its own name.
+        let child = announce_seat("Brio Agent", 5252);
+        assert_eq!(child.seat, "brio-agent");
+        assert_ne!(child.holder, parent.holder);
+        assert_eq!(
+            seat_from_session_records()
+                .expect("the parent's record")
+                .holder,
+            parent.holder,
+            "the child leaves the parent's record alone"
+        );
+        retire_seat(5252);
+        assert_eq!(
+            seat_from_session_records()
+                .expect("still the parent's")
+                .holder,
+            parent.holder,
+            "the child's exit does not take the parent's record"
+        );
+        retire_seat(5151);
+        assert!(seat_from_session_records().is_none());
+        unsafe {
+            std::env::remove_var("ACME_SESSION_ID");
+            std::env::remove_var("XDG_RUNTIME_DIR");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_thread_named_on_a_call_holds_as_its_shells_do() {
+        let _g = env_guard();
+        let dir = std::env::temp_dir().join(format!("ljos-thread-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", &dir) };
+        assert!(runner_session_var("ACME_THREAD_ID", "0199a1b2-c3d4"));
+        assert!(!runner_session_var("ACME_THREAD_ID", "short"));
+        // No shell has sat yet: the thread id is the holder, and recorded.
+        let first = seat_for_thread("0199a1b2-aaaa-thread");
+        assert_eq!(first.holder, "0199a1b2-aaaa-thread");
+        let text = std::fs::read_to_string(session_record_path("0199a1b2-aaaa-thread")).unwrap();
+        assert_eq!(
+            holder_naming(&text, "0199a1b2-aaaa-thread").as_deref(),
+            Some("0199a1b2-aaaa-thread")
+        );
+        // A shell of the thread sat first: the call takes the shell's holder.
+        let shell = Seat {
+            seat: "acme".into(),
+            holder: "sess-shellfirst".into(),
+            source: String::new(),
+        };
+        write_record_ids(
+            &session_record_path("0199a1b2-bbbb-thread"),
+            &shell,
+            &["line-editor-id".into(), "0199a1b2-bbbb-thread".into()],
+        );
+        assert_eq!(
+            seat_for_thread("0199a1b2-bbbb-thread").holder,
+            "sess-shellfirst"
+        );
+        unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
