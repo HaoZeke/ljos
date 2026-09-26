@@ -445,5 +445,6 @@ Exit 1 when the tracker, the deed store, or the pack does not answer. The
 tracker row names how many commits origin lacks, and fails when that count
 sits through the push wait. It also fails when another remote of the
 tracker holds a different head of the branch, as of the last fetch: two
-seats pushing to two remotes each read only their own writes. A missing
+seats pushing to two remotes each read only their own writes. A sitting's own tracker push goes to
+every remote that carries the branch. A missing
 claim graph is reported and is not a failure: the first claim creates it.

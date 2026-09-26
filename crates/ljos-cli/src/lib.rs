@@ -5352,6 +5352,28 @@ fn tracker_remote_split(root: &Path, up: &str) -> Option<String> {
     })
 }
 
+/// The remotes other than the upstream's that carry its branch, as
+/// (remote, branch). Names that would need quoting are left out.
+fn tracker_mirrors(root: &Path, up: &str) -> Option<Vec<(String, String)>> {
+    let (upstream, branch) = up.split_once('/')?;
+    let plain = |s: &str| {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-_./".contains(c))
+    };
+    let refs = git_ok_stdout(
+        root,
+        &["for-each-ref", "--format=%(refname:short)", "refs/remotes"],
+    )?;
+    Some(
+        refs.lines()
+            .filter_map(|r| r.trim().split_once('/'))
+            .filter(|(r, b)| *r != upstream && *b == branch && plain(r) && plain(b))
+            .map(|(r, b)| (r.to_string(), b.to_string()))
+            .collect(),
+    )
+}
+
 fn unpushed_drift(root: &Path, up: &str) -> Option<(String, bool)> {
     let range = format!("{up}..HEAD");
     let count: u64 = git_ok_stdout(root, &["rev-list", "--count", &range])?
@@ -7448,10 +7470,22 @@ pub fn persist_tracker(issue: &str, verb: &str) -> String {
         return format!("tracker git: committed {message}; push not started: no log file\n");
     };
     let err = out.try_clone();
-    let mut push = std::process::Command::new("git");
-    push.arg("-C")
-        .arg(dir)
-        .args(["push", "-q"])
+    // Every other remote that carries the branch gets it too: seats that
+    // read a tracker through different remotes see each other's claims
+    // only when every push reaches all of them.
+    let mirrors = tracker_upstream(dir)
+        .and_then(|up| tracker_mirrors(dir, &up))
+        .unwrap_or_default();
+    let mut script = String::from("git push -q; rc=$?");
+    for (remote, branch) in &mirrors {
+        script.push_str(&format!(
+            "; git push -q '{remote}' 'HEAD:refs/heads/{branch}' || rc=1"
+        ));
+    }
+    script.push_str("; exit $rc");
+    let mut push = std::process::Command::new("sh");
+    push.current_dir(dir)
+        .args(["-c", &script])
         .stdin(std::process::Stdio::null())
         .stdout(out);
     if let Ok(err) = err {
@@ -8998,6 +9032,11 @@ mod tests {
         git(&root, &["branch", "-q", "-u", "origin/main"]);
         let (state, ok) = super::tracker_git_drift(&root).unwrap();
         assert!(ok, "{state}");
+        assert_eq!(
+            super::tracker_mirrors(&root, "origin/main").unwrap(),
+            vec![("mirror".to_string(), "main".to_string())],
+            "a tracker push reaches the mirror too"
+        );
 
         std::fs::write(root.join("Software/.keep"), "one side\n").unwrap();
         git(&root, &["commit", "-qam", "only origin"]);

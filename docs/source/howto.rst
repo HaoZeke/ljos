@@ -344,5 +344,6 @@ the checkout holds that origin does not, and fails when that count sits
 through the push wait; a leftover refused-push log is named on the row. It
 also fails when another remote of the tracker holds a different head of the
 branch, as of the last fetch: two seats pushing to two remotes each read
-only their own writes. A missing claim graph is reported and is not a failure: the first claim
+only their own writes. A sitting's own tracker push goes to every remote
+that carries the branch. A missing claim graph is reported and is not a failure: the first claim
 creates it.
