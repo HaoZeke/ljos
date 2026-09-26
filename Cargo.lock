@@ -2554,6 +2554,7 @@ name = "ljos"
 version = "0.17.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "libc",
  "packset-client",
