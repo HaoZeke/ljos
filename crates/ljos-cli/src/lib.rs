@@ -99,11 +99,8 @@ pub struct Harness {
 /// The plugins `ljos` carries for runners whose hooks are code, by name.
 /// `{ljos}` in each is filled with the absolute path at onboard.
 pub const PLUGIN_TEMPLATES: &[(&str, &str)] = &[
-    (
-        "opencode",
-        include_str!("../../../scripts/opencode/ljos.ts"),
-    ),
-    ("omp", include_str!("../../../scripts/omp/ljos.ts")),
+    ("opencode", include_str!("../assets/opencode/ljos.ts")),
+    ("omp", include_str!("../assets/omp/ljos.ts")),
 ];
 
 /// A runner's plugin as it is written: the template, `{ljos}` filled.
@@ -1332,7 +1329,7 @@ pub fn onboard(harness: &str, dry: bool) -> Result<Vec<Step>> {
 }
 
 /// Frozen Grok hook file. Copied to `~/.grok/hooks/ljos.json`.
-const GROK_HOOKS_JSON: &str = include_str!("../../../scripts/grok/ljos.json");
+const GROK_HOOKS_JSON: &str = include_str!("../assets/grok/ljos.json");
 
 /// The `ljos` a runner's hook runs: the one beside `ljos-mcp`, by absolute
 /// path, since a runner started outside a login shell has no `~/.local/bin`

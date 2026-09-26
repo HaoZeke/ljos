@@ -33,7 +33,7 @@ Event                What ``ljos hook`` does           What Grok does with stdou
 ``SessionEnd``       fires injected memories           ignored
 ==================== ================================= ==========================
 
-The frozen file is `scripts/grok/ljos.json <../../scripts/grok/ljos.json>`__.
+The frozen file is `crates/ljos-cli/assets/grok/ljos.json <../../crates/ljos-cli/assets/grok/ljos.json>`__.
 Its ``{ljos}`` is filled in at onboard. ``PreToolUse`` gets 10 seconds, the
 TCB check's budget; the others get Grok's default 5.
 
