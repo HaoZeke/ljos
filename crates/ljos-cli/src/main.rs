@@ -662,7 +662,9 @@ fn main() -> Result<()> {
             let context = match call.event.as_str() {
                 "PreToolUse" | "argv" => String::new(),
                 "PostToolUse" => take_hook_context(call.session.as_deref()),
-                "SessionStart" => String::new(),
+                // A turn ending is not a session ending, and has nothing
+                // to say either.
+                "SessionStart" | "TurnEnd" => String::new(),
                 _ => {
                     let ctx = hook_context(&call, limit);
                     hold_hook_context(call.session.as_deref(), &ctx);

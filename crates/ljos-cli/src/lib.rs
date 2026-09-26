@@ -601,6 +601,25 @@ fn record_for(text: &str, mine: &[String], source: String) -> Option<Seat> {
     })
 }
 
+/// Names an MCP library sends when the runner gives none. They name the
+/// library, not the runner, and every runner built on it would share one
+/// seat.
+const LIBRARY_CLIENT_NAMES: &[&str] = &["mcp", "mcp-client", "client", "runner"];
+
+/// The seat a connecting client names: its own name, unless that is a
+/// library's default; then the program above this server, else `runner`.
+fn seat_for_client(client: &str) -> String {
+    let name = seat_slug(client);
+    if !LIBRARY_CLIENT_NAMES.contains(&name.as_str()) {
+        return name;
+    }
+    ancestry()
+        .into_iter()
+        .find(|(_, comm)| !WRAPPERS.contains(&comm.as_str()))
+        .map(|(pid, comm)| seat_slug(&program_name(pid, &comm)))
+        .unwrap_or(name)
+}
+
 /// The seat of a record another seat left under one of this process's
 /// conversation ids. A runner started from a shell of another runner
 /// inherits that runner's ids; the record they find is the parent's.
@@ -672,7 +691,7 @@ fn holder_naming(text: &str, id: &str) -> Option<String> {
 /// shell carries that runner's ids; it holds under its own process and
 /// leaves the parent's records alone.
 pub fn announce_seat(client: &str, runner_pid: u32) -> Seat {
-    let name = seat_slug(client);
+    let name = seat_for_client(client);
     if let Some(parent) = inherited_record(&name) {
         let seat = Seat::tagged(
             name,
@@ -1442,6 +1461,13 @@ pub const HOOK_MATCHERS: &[(&str, &str)] = &[
 /// PascalCase `hook_event_name`. One name in the seat.
 fn normalize_hook_event(raw: &str) -> &str {
     match raw {
+        "pre_llm_call" => "UserPromptSubmit",
+        "pre_tool_call" => "PreToolUse",
+        "post_tool_call" => "PostToolUse",
+        // One runner fires on_session_end after every turn; its session
+        // ends on finalize or reset.
+        "on_session_finalize" | "on_session_reset" => "SessionEnd",
+        "on_session_end" => "TurnEnd",
         "pre_tool_use" | "PreToolUse" => "PreToolUse",
         "post_tool_use" | "PostToolUse" => "PostToolUse",
         "user_prompt_submit" | "UserPromptSubmit" => "UserPromptSubmit",
@@ -1670,6 +1696,10 @@ pub enum HookShape {
     /// camelCase stdin (`hookEventName`, `toolInput`); a top-level
     /// `decision` blocks, and there is no `ask`.
     CamelCase,
+    /// lower-case event names (`pre_llm_call`, `pre_tool_call`) with the
+    /// prompt under `extra.user_message`; a top-level `context` is
+    /// injected, `decision: block` blocks, and there is no `ask`.
+    Context,
 }
 
 impl HookShape {
@@ -1695,8 +1725,14 @@ pub fn hook_call(input: &str) -> HookCall {
             shape: HookShape::Asks,
         };
     };
+    let raw_event = v["hook_event_name"].as_str().unwrap_or("");
     let shape = if v.get("hookEventName").is_some() || v.get("toolInput").is_some() {
         HookShape::CamelCase
+    } else if raw_event.starts_with("pre_")
+        || raw_event.starts_with("post_")
+        || raw_event.starts_with("on_")
+    {
+        HookShape::Context
     } else if v.get("turn_id").is_some() {
         HookShape::DenyOnly
     } else {
@@ -1718,6 +1754,8 @@ pub fn hook_call(input: &str) -> HookCall {
         .unwrap_or("PreToolUse");
     let event = normalize_hook_event(raw).to_string();
     let cue = if let Some(p) = v["prompt"].as_str() {
+        p.to_string()
+    } else if let Some(p) = v["extra"]["user_message"].as_str() {
         p.to_string()
     } else if let Some(c) = input["command"].as_str() {
         c.to_string()
@@ -2059,6 +2097,13 @@ pub fn hook_output_ruled(call: &HookCall, context: &str, verdict: Option<&Rule>)
         }
         return out;
     }
+    if call.shape == HookShape::Context && verdict.is_none() {
+        return if context.is_empty() {
+            String::new()
+        } else {
+            serde_json::json!({ "context": context }).to_string() + "\n"
+        };
+    }
     let mut specific = serde_json::json!({ "hookEventName": call.event });
     if !context.is_empty() {
         specific["additionalContext"] = Value::String(context.to_string());
@@ -2082,6 +2127,14 @@ pub fn hook_output_ruled(call: &HookCall, context: &str, verdict: Option<&Rule>)
                     format!("{} (seat rule `{}`)", r.reason, r.pattern),
                 )
             };
+            if call.shape == HookShape::Context {
+                // `block` is the one verb there; context rides along.
+                let mut out = serde_json::json!({ "decision": "block", "reason": reason });
+                if !context.is_empty() {
+                    out["context"] = Value::String(context.to_string());
+                }
+                return out.to_string() + "\n";
+            }
             specific["permissionDecision"] = Value::String(decision.to_string());
             specific["permissionDecisionReason"] = Value::String(reason.clone());
             if call.shape == HookShape::CamelCase {
@@ -9383,6 +9436,18 @@ mod tests {
     }
 
     #[test]
+    fn a_library_default_client_name_is_not_a_seat() {
+        assert_eq!(seat_for_client("Acme CLI"), "acme-cli");
+        for library in ["mcp", "MCP", "mcp-client"] {
+            let seat = seat_for_client(library);
+            assert!(
+                !LIBRARY_CLIENT_NAMES.contains(&seat.as_str()) || ancestry().is_empty(),
+                "{library} named the seat {seat}"
+            );
+        }
+    }
+
+    #[test]
     fn a_runner_started_inside_another_keeps_its_own_holder() {
         let _g = env_guard();
         let dir = std::env::temp_dir().join(format!("ljos-nest-{}", std::process::id()));
@@ -10076,6 +10141,40 @@ mod tests {
         .unwrap();
         assert_eq!(v["decision"], "deny");
         assert!(v["reason"].as_str().unwrap().contains("Never force push"));
+        // Lower-case events: the prompt under extra, answers at the top.
+        let turn = hook_call(
+            r#"{"hook_event_name":"pre_llm_call","tool_name":null,"tool_input":null,"session_id":"h-1","extra":{"user_message":"fix the fuse"}}"#,
+        );
+        assert_eq!(turn.shape, HookShape::Context);
+        assert_eq!(turn.event, "UserPromptSubmit");
+        assert_eq!(turn.cue, "fix the fuse");
+        let v: Value =
+            serde_json::from_str(hook_output_ruled(&turn, "- [lesson] x", None).trim()).unwrap();
+        assert_eq!(v["context"], "- [lesson] x");
+        assert!(v.get("hookSpecificOutput").is_none());
+        let tool = hook_call(
+            r#"{"hook_event_name":"pre_tool_call","tool_name":"terminal","tool_input":{"command":"git push origin x"},"session_id":"h-1","extra":{}}"#,
+        );
+        assert_eq!(tool.event, "PreToolUse");
+        let v: Value = serde_json::from_str(
+            hook_output_ruled(&tool, "", verdict_for(&rules, &tool.cue)).trim(),
+        )
+        .unwrap();
+        assert_eq!(v["decision"], "block");
+        assert!(v["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("ask the person before running this"));
+        assert_eq!(
+            hook_call(r#"{"hook_event_name":"on_session_end","session_id":"h-1","extra":{}}"#)
+                .event,
+            "TurnEnd"
+        );
+        assert_eq!(
+            hook_call(r#"{"hook_event_name":"on_session_finalize","session_id":"h-1","extra":{}}"#)
+                .event,
+            "SessionEnd"
+        );
         // An ask on a runner that cannot ask stops the tool.
         let deny_only = hook_call(
             r#"{"hook_event_name":"PreToolUse","session_id":"c-1","turn_id":"t-1","tool_name":"Bash","tool_input":{"command":"git push origin x"}}"#,
