@@ -5010,6 +5010,9 @@ pub fn doctor_seat() -> Vec<Habitat> {
             ok,
         });
     }
+    // The host the seat runs on: a kernel that OOM-kills keeps killing the
+    // encoder, the runners and the desktop, and every other row stays green.
+    out.push(host_row());
     // Who is sitting: the name this runner votes under, the name this
     // conversation claims under, and where they came from.
     out.push(Habitat {
@@ -5024,10 +5027,15 @@ pub fn doctor_seat() -> Vec<Habitat> {
         match PacksetClient::from_env().and_then(|c| c.status(None)) {
             Ok(status) => {
                 let available = status["embedder"]["available"].as_bool().unwrap_or(false);
+                let answering = status["embedder"]["answering"].as_bool();
                 Habitat {
                     name: "encoder",
                     state: if available {
                         "dense ballot on".to_string()
+                    } else if answering == Some(false) {
+                        "packset-embed did not answer its last call (killed or crashed); \
+                         ranking is lexical until packsetd restarts it on the next search"
+                            .to_string()
                     } else {
                         "down; cargo binstall packset-embed and put it beside packsetd".to_string()
                     },
@@ -5408,6 +5416,89 @@ fn unpushed_drift(root: &Path, up: &str) -> Option<(String, bool)> {
         return Some((format!("{unpushed}; last push refused: {why}"), false));
     }
     Some((unpushed, !stuck))
+}
+
+/// The kernel, its OOM kills since boot, and the ljos-mcp servers this
+/// login runs with their resident memory. Fails on any OOM kill: one kill
+/// took the encoder, the next the compositor.
+fn host_row() -> Habitat {
+    let kernel = std::fs::read_to_string("/proc/sys/kernel/osrelease")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| "unknown kernel".into());
+    let kills = oom_kills();
+    let (servers, rss_kb) = ljos_mcp_servers();
+    let mcp = format!("{servers} ljos-mcp, {} MB resident", rss_kb / 1024);
+    match kills {
+        Some(0) => Habitat {
+            name: "host",
+            state: format!("{kernel}; no OOM kills since boot; {mcp}"),
+            ok: true,
+        },
+        Some(n) => Habitat {
+            name: "host",
+            state: format!(
+                "{kernel}; {n} OOM kills since boot (/proc/vmstat oom_kill); {mcp}; \
+                 the kernel is killing processes, read `journalctl -k -b` before the load"
+            ),
+            ok: false,
+        },
+        None => Habitat {
+            name: "host",
+            state: format!("{kernel}; {mcp}"),
+            ok: true,
+        },
+    }
+}
+
+/// OOM kills since boot, from `/proc/vmstat`; none where it is not.
+fn oom_kills() -> Option<u64> {
+    parse_oom_kills(&std::fs::read_to_string("/proc/vmstat").ok()?)
+}
+
+fn parse_oom_kills(vmstat: &str) -> Option<u64> {
+    vmstat
+        .lines()
+        .find_map(|l| l.strip_prefix("oom_kill "))
+        .and_then(|n| n.trim().parse().ok())
+}
+
+/// The ljos-mcp processes of this user and their summed resident size in
+/// kB, from procfs.
+fn ljos_mcp_servers() -> (usize, u64) {
+    let uid = std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| status_field(&s, "Uid:"));
+    let Ok(dir) = std::fs::read_dir("/proc") else {
+        return (0, 0);
+    };
+    let mut count = 0;
+    let mut rss = 0;
+    for entry in dir.flatten() {
+        let path = entry.path();
+        if std::fs::read_to_string(path.join("comm")).map_or(true, |c| c.trim() != "ljos-mcp") {
+            continue;
+        }
+        let Ok(status) = std::fs::read_to_string(path.join("status")) else {
+            continue;
+        };
+        if status_field(&status, "Uid:") != uid {
+            continue;
+        }
+        count += 1;
+        rss += status_field(&status, "VmRSS:")
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0);
+    }
+    (count, rss)
+}
+
+/// The first number on a `/proc/*/status` line.
+fn status_field(status: &str, key: &str) -> Option<String> {
+    status
+        .lines()
+        .find_map(|l| l.strip_prefix(key))
+        .and_then(|rest| rest.split_whitespace().next())
+        .map(str::to_string)
 }
 
 /// Whether every required habitat answers.
@@ -9472,6 +9563,22 @@ mod tests {
         assert!(super::record_for(&ours, &shell, "t".into()).is_some());
         // A record from before the ids line is taken as it stands.
         assert!(super::record_for("acme-cli\nsess-old\n", &mine, "t".into()).is_some());
+    }
+
+    #[test]
+    fn the_host_row_reads_oom_kills_and_this_logins_servers() {
+        assert_eq!(
+            parse_oom_kills("pgfault 12\noom_kill 43\nnr_free_pages 1\n"),
+            Some(43)
+        );
+        assert_eq!(parse_oom_kills("pgfault 12\n"), None);
+        assert_eq!(
+            status_field("Name:\tx\nVmRSS:\t  2692 kB\n", "VmRSS:").as_deref(),
+            Some("2692")
+        );
+        let row = host_row();
+        assert_eq!(row.name, "host");
+        assert!(row.state.contains("ljos-mcp"), "{}", row.state);
     }
 
     #[test]
