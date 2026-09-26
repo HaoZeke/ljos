@@ -86,6 +86,92 @@ pub struct Harness {
     /// and one prompt. `["UserPromptSubmit", "PreToolUse"]` injects on both.
     #[serde(default)]
     pub hook_events: Vec<String>,
+    /// Where a runner whose hooks are code loads a plugin from, for a
+    /// runner with no hooks file: the plugin carries the memory hook and
+    /// argv law and shells to `ljos hook`.
+    #[serde(default)]
+    pub plugin: Option<String>,
+    /// Which bundled plugin goes there: a name in [`PLUGIN_TEMPLATES`].
+    #[serde(default)]
+    pub plugin_template: Option<String>,
+}
+
+/// The plugins `ljos` carries for runners whose hooks are code, by name.
+/// `{ljos}` in each is filled with the absolute path at onboard.
+pub const PLUGIN_TEMPLATES: &[(&str, &str)] = &[
+    (
+        "opencode",
+        include_str!("../../../scripts/opencode/ljos.ts"),
+    ),
+    ("omp", include_str!("../../../scripts/omp/ljos.ts")),
+];
+
+/// A runner's plugin as it is written: the template, `{ljos}` filled.
+fn plugin_text(h: &Harness, ljos: &Path) -> Option<String> {
+    let name = h.plugin_template.as_deref()?;
+    PLUGIN_TEMPLATES
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, t)| t.replace("{ljos}", &ljos.display().to_string()))
+}
+
+fn plugin_step(h: &Harness, dest: &Path, dry: bool) -> Step {
+    let what = "plugin".to_string();
+    let ljos = match ljos_path() {
+        Ok(l) => l,
+        Err(e) => {
+            return Step {
+                what,
+                detail: format!("{e:#}"),
+                ok: false,
+            };
+        }
+    };
+    let Some(text) = plugin_text(h, &ljos) else {
+        return Step {
+            what,
+            detail: format!(
+                "plugin_template {:?} is not one of {}",
+                h.plugin_template.as_deref().unwrap_or(""),
+                PLUGIN_TEMPLATES
+                    .iter()
+                    .map(|(n, _)| *n)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            ok: false,
+        };
+    };
+    if std::fs::read_to_string(dest).is_ok_and(|have| have == text) {
+        return Step {
+            what,
+            detail: format!("{} is current", dest.display()),
+            ok: true,
+        };
+    }
+    if dry {
+        return Step {
+            what,
+            detail: format!("would write {}", dest.display()),
+            ok: true,
+        };
+    }
+    let written = dest
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(dest, text));
+    match written {
+        Ok(()) => Step {
+            what,
+            detail: format!("wrote {}", dest.display()),
+            ok: true,
+        },
+        Err(e) => Step {
+            what,
+            detail: format!("{}: {e}", dest.display()),
+            ok: false,
+        },
+    }
 }
 
 /// The whole file: `[[harness]]` tables.
@@ -115,8 +201,13 @@ hooks = "~/.runner/settings.json"
 name = "runner-with-a-config-file"
 config = "~/.other/config.toml"
 marker = "[mcp_servers.ljos]"
-snippet = "\n[mcp_servers.ljos]\ncommand = \"{server}\"\nargs = []\n"
+# A runner that rebuilds its servers' environment from a short list must be
+# told to pass XDG_RUNTIME_DIR, where the seat records live.
+snippet = "\n[mcp_servers.ljos]\ncommand = \"{server}\"\nargs = []\nenv_vars = [\"XDG_RUNTIME_DIR\"]\n"
 skills = "~/.other/skills"
+hooks = "~/.other/hooks.json"
+# A runner with no SessionEnd event takes the prompt and the tool call.
+hook_events = ["UserPromptSubmit", "PreToolUse"]
 
 [[harness]]
 name = "runner-with-a-json-config"
@@ -134,8 +225,12 @@ skills = "~/.config/runner/skills"
 name = "opencode"
 config_json = "~/.config/opencode/opencode.json"
 json_pointer = "/mcp/ljos"
-json_entry = '{"type": "local", "command": ["{server}"], "enabled": true, "environment": {"LJOS_SEAT": "{name}"}}'
+json_entry = '{"type": "local", "command": ["{server}"], "enabled": true, "timeout": 30000}'
 skills = "~/.config/opencode/skills"
+# opencode's hooks are a plugin: the memory hook on each prompt, argv law
+# on each bash call, the session id in every shell it opens.
+plugin = "~/.config/opencode/plugins/ljos.ts"
+plugin_template = "opencode"
 
 [[harness]]
 name = "hermes"
@@ -150,7 +245,11 @@ name = "omp"
 config_json = "~/.omp/agent/mcp.json"
 json_pointer = "/mcpServers/ljos"
 json_entry = '{"type": "stdio", "command": "{server}", "args": []}'
+# A host whose omp config sets enablePiUser false reads skills from its
+# skills.customDirectories instead; name that directory here.
 skills = "~/.omp/agent/skills"
+plugin = "~/.omp/agent/extensions/ljos.ts"
+plugin_template = "omp"
 
 [[harness]]
 name = "grok"
@@ -1312,6 +1411,9 @@ pub fn onboard_from(file: &Path, harness: &str, dry: bool) -> Result<Vec<Step>> 
     if let Some(file) = &h.hooks {
         steps.push(hook_step(&expand(file), &hook_events_of(h), dry));
     }
+    if let Some(dest) = &h.plugin {
+        steps.push(plugin_step(h, &expand(dest), dry));
+    }
     match &h.skills {
         Some(dir) => steps.push(write_skill(&expand(dir), dry)),
         None => steps.push(Step {
@@ -2069,6 +2171,29 @@ fn harness_rows() -> Vec<Habitat> {
                     )
                 },
                 ok: installed,
+            });
+        }
+        if let Some(dest) = &h.plugin {
+            let path = expand(dest);
+            let want = ljos_path().ok().and_then(|l| plugin_text(h, &l));
+            let current = want
+                .as_ref()
+                .is_some_and(|w| std::fs::read_to_string(&path).is_ok_and(|t| &t == w));
+            rows.push(Habitat {
+                name: "runner hook",
+                state: if current {
+                    format!("{}: plugin {}", h.name, path.display())
+                } else if path.is_file() {
+                    format!(
+                        "{}: plugin {} is stale; ljos onboard --harness {}",
+                        h.name,
+                        path.display(),
+                        h.name
+                    )
+                } else {
+                    format!("{}: no plugin; ljos onboard --harness {}", h.name, h.name)
+                },
+                ok: current,
             });
         }
         rows.push(Habitat {
@@ -10336,6 +10461,31 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn a_plugin_runner_gets_its_bundled_plugin_with_ljos_filled() {
+        let all: super::Harnesses = toml::from_str(super::HARNESSES_EXAMPLE).expect("parses");
+        for name in ["opencode", "omp"] {
+            let h = all.harness.iter().find(|h| h.name == name).expect(name);
+            assert!(h.plugin.is_some(), "{name} names a plugin path");
+            let text = super::plugin_text(h, Path::new("/opt/seat/bin/ljos")).expect(name);
+            assert!(text.contains("\"/opt/seat/bin/ljos\""), "{name}");
+            assert!(!text.contains("{ljos}"), "{name}");
+            assert!(
+                text.contains("PreToolUse") && text.contains("UserPromptSubmit"),
+                "{name}"
+            );
+        }
+        let unknown = super::Harness {
+            name: "x".into(),
+            plugin: Some("/tmp/x.ts".into()),
+            plugin_template: Some("nobody".into()),
+            ..Default::default()
+        };
+        assert!(super::plugin_text(&unknown, Path::new("/l")).is_none());
+        let step = super::plugin_step(&unknown, Path::new("/tmp/x.ts"), true);
+        assert!(!step.ok, "an unknown template writes nothing: {step:?}");
+    }
+
     /// The example file parses, and onboarding a config-file runner from it
     /// appends the entry once and writes the skill once; a dry run writes
     /// nothing; an unnamed runner is refused with the names the file holds.
@@ -10794,6 +10944,8 @@ mod tests {
             skills: None,
             hooks: None,
             hook_events: Vec::new(),
+            plugin: None,
+            plugin_template: None,
         };
         assert_eq!(is_registered(&h, Path::new("/bin/ljos-mcp")), Some(true));
         let _ = std::fs::remove_dir_all(&dir);
