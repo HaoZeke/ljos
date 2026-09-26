@@ -12,7 +12,9 @@ Install
 
    $ ljos onboard --harness grok
 
-That writes ``~/.grok/hooks/ljos.json`` once (``ljos hook`` on PATH). Then
+That writes ``~/.grok/hooks/ljos.json`` once, naming ``ljos`` by the absolute
+path beside ``ljos-mcp``, so a Grok started outside a login shell still finds
+it. Then
 ``/hooks`` then ``r`` **once**. Later ``cargo binstall ljos`` is live on the
 next event. Name ``ljos-mcp`` on PATH in ``~/.grok/config.toml``.
 ``ljos onboard --harness grok`` bumps ``LJOS_MCP_GENERATION`` in that table
@@ -31,7 +33,15 @@ Event                What ``ljos hook`` does           What Grok does with stdou
 ``SessionEnd``       fires injected memories           ignored
 ==================== ================================= ==========================
 
-The frozen file is `scripts/grok/ljos.json <../../scripts/grok/ljos.json>`__. It only names ``ljos hook``.
+The frozen file is `scripts/grok/ljos.json <../../scripts/grok/ljos.json>`__.
+Its ``{ljos}`` is filled in at onboard. ``PreToolUse`` gets 10 seconds, the
+TCB check's budget; the others get Grok's default 5.
+
+Grok's stdin is camelCase (``hookEventName``, ``sessionId``, ``toolInput``),
+and ``ljos hook`` reads it as the snake_case fields. Grok blocks on a
+top-level ``decision`` and has no ``ask``, so a deny carries
+``"decision":"deny"`` beside ``hookSpecificOutput``, and an ``ask`` rule is
+written as a deny that tells the agent to ask the person.
 
 Smoke
 =====
@@ -39,8 +49,8 @@ Smoke
 .. code:: console
 
    $ echo '{"hook_event_name":"PreToolUse","tool_input":{"command":"echo"}}' | ljos hook
-   $ echo '{"hook_event_name":"PreToolUse","tool_input":{"command":"git push --force"}}' | ljos hook
-   {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"git-force-push (seat rule `ljos-policyd`)"}}
+   $ echo '{"hookEventName":"pre_tool_use","toolInput":{"command":"git push --force"}}' | ljos hook
+   {"decision":"deny","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"git-force-push (seat rule `ljos-policyd`)"},"reason":"git-force-push (seat rule `ljos-policyd`)"}
    $ echo '{"hook_event_name":"PostToolUse","session_id":"s"}' | ljos hook
 
 An allow prints nothing unless a prompt has already held pack text.

@@ -1123,6 +1123,22 @@ pub fn onboard(harness: &str, dry: bool) -> Result<Vec<Step>> {
 /// Frozen Grok hook file. Copied to `~/.grok/hooks/ljos.json`.
 const GROK_HOOKS_JSON: &str = include_str!("../../../scripts/grok/ljos.json");
 
+/// The `ljos` a runner's hook runs: the one beside `ljos-mcp`, by absolute
+/// path, since a runner started outside a login shell has no `~/.local/bin`
+/// on its PATH.
+fn ljos_path() -> Result<PathBuf> {
+    let beside = server_path()?.with_file_name("ljos");
+    if beside.is_file() {
+        return Ok(beside);
+    }
+    which::which("ljos").context("ljos not on PATH")
+}
+
+/// The grok hooks file with `{ljos}` filled in.
+fn grok_hooks_json(ljos: &Path) -> String {
+    GROK_HOOKS_JSON.replace("{ljos}", &ljos.display().to_string())
+}
+
 fn write_grok_hooks(dry: bool) -> Result<Step> {
     let dest = home()?.join(".grok/hooks/ljos.json");
     if dry {
@@ -1135,7 +1151,7 @@ fn write_grok_hooks(dry: bool) -> Result<Step> {
     if let Some(dir) = dest.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    std::fs::write(&dest, GROK_HOOKS_JSON)?;
+    std::fs::write(&dest, grok_hooks_json(&ljos_path()?))?;
     Ok(Step {
         what: "hook".into(),
         detail: format!("wrote {}", dest.display()),
@@ -10229,6 +10245,17 @@ mod tests {
             "{}",
             steps[0].detail
         );
+    }
+
+    #[test]
+    fn the_grok_hook_file_runs_ljos_by_absolute_path() {
+        let text = super::grok_hooks_json(Path::new("/opt/seat/bin/ljos"));
+        let v: Value = serde_json::from_str(&text).expect("the hook file is JSON");
+        let pre = &v["hooks"]["PreToolUse"][0]["hooks"][0];
+        assert_eq!(pre["command"], "/opt/seat/bin/ljos hook");
+        assert_eq!(pre["timeout"], 10);
+        assert!(!text.contains("{ljos}"), "{text}");
+        assert!(!text.contains("\"ljos hook\""), "{text}");
     }
 
     use super::*;
