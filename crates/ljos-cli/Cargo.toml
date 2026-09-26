@@ -32,6 +32,7 @@ path = "src/bin/ljos-mcp/main.rs"
 
 [dependencies]
 libc = "0.2"
+chrono = "0.4"
 anyhow.workspace = true
 clap.workspace = true
 packset-client.workspace = true

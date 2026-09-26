@@ -6500,7 +6500,7 @@ fn timeline_of(issue: &str, limit: usize) -> Result<(String, Vec<Event>)> {
             continue;
         };
         if let Ok(said) = run_captured("deedar", &["evidence", accession]) {
-            if let Some(ev) = deed_event(accession, &said.stdout) {
+            if let Some(ev) = deed_event(accession, &said.stdout, local_offset) {
                 events.push(ev);
             }
         }
@@ -6513,7 +6513,8 @@ fn timeline_of(issue: &str, limit: usize) -> Result<(String, Vec<Event>)> {
             .filter(|a| reviewable(a))
             .take(8)
         {
-            if let Some((days, clock)) = stamp_key(atom["ts"].as_str()) {
+            if let Some((days, clock)) = stamp_key(atom["ts"].as_str().map(local_stamp).as_deref())
+            {
                 events.push(Event {
                     days,
                     clock,
@@ -6549,8 +6550,37 @@ pub fn timeline(issue: &str, limit: usize) -> Result<String> {
     Ok(format!(
         "timeline of {issue}: {title}
 {}",
-        format_events(&events, &now_utc())
+        format_events(&events, &now_local())
     ))
+}
+
+/// The reader's seconds east of UTC at the instant `secs`. The tracker
+/// writes org stamps in local wall time; a timeline reads every store in it.
+fn local_offset(secs: i64) -> i64 {
+    use chrono::{Local, Offset, TimeZone};
+    Local
+        .timestamp_opt(secs, 0)
+        .single()
+        .map_or(0, |t| i64::from(t.offset().fix().local_minus_utc()))
+}
+
+/// Now in local wall time, `YYYY-MM-DDTHH:MM:SS`, the zone of the tracker's
+/// org stamps.
+fn now_local() -> String {
+    chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string()
+}
+
+/// An RFC 3339 stamp as local wall time, `YYYY-MM-DDTHH:MM`; any other shape
+/// comes back unchanged.
+fn local_stamp(ts: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(ts.trim()).map_or_else(
+        |_| ts.to_string(),
+        |t| {
+            t.with_timezone(&chrono::Local)
+                .format("%Y-%m-%dT%H:%M")
+                .to_string()
+        },
+    )
 }
 
 /// The tracker's own events on an issue: created, each state change, the
@@ -6611,13 +6641,16 @@ fn tracker_events(v: &Value) -> Vec<Event> {
 
 /// A deed's event from `deedar evidence`: the time it was produced, by
 /// whom.
-fn deed_event(accession: &str, evidence: &str) -> Option<Event> {
-    let secs: i64 = evidence
+/// `offset_of` gives the reader's seconds east of UTC at that instant, so
+/// the deed lands on the same wall-clock day as the tracker's org stamps.
+fn deed_event(accession: &str, evidence: &str, offset_of: fn(i64) -> i64) -> Option<Event> {
+    let utc: i64 = evidence
         .lines()
         .find_map(|l| l.strip_prefix("time="))?
         .trim()
         .parse()
         .ok()?;
+    let secs = utc + offset_of(utc);
     let by = evidence
         .lines()
         .find_map(|l| l.strip_prefix("producedBy="))
@@ -9193,6 +9226,30 @@ mod tests {
     }
 
     #[test]
+    fn a_timeline_reads_every_store_on_the_local_day() {
+        let _g = env_guard();
+        let before = std::env::var("TZ").ok();
+        unsafe { std::env::set_var("TZ", "CET-1CEST,M3.5.0,M10.5.0/3") };
+        // 22:28 UTC on the 26th is 00:28 on the 27th in Amsterdam, the day
+        // the tracker stamps an issue created then.
+        assert_eq!(local_stamp("2026-09-26T22:28:12.170Z"), "2026-09-27T00:28");
+        assert_eq!(local_stamp("[2026-09-27 Sun]"), "[2026-09-27 Sun]");
+        assert_eq!(local_offset(1_788_566_400), 7200);
+        let deed = deed_event("deed-x", "time=1790461680\n", local_offset).unwrap();
+        let v = serde_json::json!({"properties": {"CREATED": "[2026-09-27 Sun]"}});
+        let mut events = tracker_events(&v);
+        events.push(deed);
+        let text = format_events(&events, "2026-09-27T00:30:00");
+        assert!(text.lines().all(|l| l.contains("\ttoday\t")), "{text}");
+        unsafe {
+            match before {
+                Some(tz) => std::env::set_var("TZ", tz),
+                None => std::env::remove_var("TZ"),
+            }
+        }
+    }
+
+    #[test]
     fn a_timeline_merges_the_three_stores_oldest_first() {
         let v = serde_json::json!({
             "properties": {
@@ -9211,6 +9268,7 @@ mod tests {
             deed_event(
                 "deed-x",
                 "id=deed-x ok\nproducedBy=seat -\ntime=1788566400\n",
+                |_| 0,
             )
             .unwrap(),
         );
