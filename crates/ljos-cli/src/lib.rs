@@ -1424,11 +1424,39 @@ pub struct HookCall {
     /// The runner's session, when it says: each memory is injected once
     /// per session, so the same lesson does not arrive on every command.
     pub session: Option<String>,
+    /// The hook contract the call arrived in; it decides how a
+    /// verdict is written back.
+    pub shape: HookShape,
+}
+
+/// The hook contract a call arrived in, told apart by its stdin. The
+/// runners share one name for the answer, `permissionDecision`, but not
+/// what they do with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HookShape {
+    /// snake_case stdin; `permissionDecision` takes `deny` or `ask`.
+    #[default]
+    Asks,
+    /// snake_case stdin carrying `turn_id`; `deny` only, and an `ask` is
+    /// rejected as unsupported and the tool runs.
+    DenyOnly,
+    /// camelCase stdin (`hookEventName`, `toolInput`); a top-level
+    /// `decision` blocks, and there is no `ask`.
+    CamelCase,
+}
+
+impl HookShape {
+    /// Whether the runner can stop and ask the person on a verdict.
+    #[must_use]
+    pub fn asks(self) -> bool {
+        self == Self::Asks
+    }
 }
 
 /// Read a hook call from the runner's JSON, or from plain text (an argv
 /// under argv law). Fields: `hook_event_name`, `tool_name`, `tool_input`
-/// (its `command`, else every string value joined), `prompt`.
+/// (its `command`, else every string value joined), `prompt`; grok's
+/// camelCase `hookEventName`, `sessionId` and `toolInput` read the same.
 #[must_use]
 pub fn hook_call(input: &str) -> HookCall {
     let trimmed = input.trim();
@@ -1437,7 +1465,20 @@ pub fn hook_call(input: &str) -> HookCall {
             event: "argv".into(),
             cue: trimmed.to_string(),
             session: None,
+            shape: HookShape::Asks,
         };
+    };
+    let shape = if v.get("hookEventName").is_some() || v.get("toolInput").is_some() {
+        HookShape::CamelCase
+    } else if v.get("turn_id").is_some() {
+        HookShape::DenyOnly
+    } else {
+        HookShape::Asks
+    };
+    let input = if v["tool_input"].is_null() {
+        &v["toolInput"]
+    } else {
+        &v["tool_input"]
     };
     let session = v["session_id"]
         .as_str()
@@ -1451,9 +1492,9 @@ pub fn hook_call(input: &str) -> HookCall {
     let event = normalize_hook_event(raw).to_string();
     let cue = if let Some(p) = v["prompt"].as_str() {
         p.to_string()
-    } else if let Some(c) = v["tool_input"]["command"].as_str() {
+    } else if let Some(c) = input["command"].as_str() {
         c.to_string()
-    } else if let Some(map) = v["tool_input"].as_object() {
+    } else if let Some(map) = input.as_object() {
         map.values()
             .filter_map(Value::as_str)
             .collect::<Vec<_>>()
@@ -1465,6 +1506,7 @@ pub fn hook_call(input: &str) -> HookCall {
         event,
         cue,
         session,
+        shape,
     }
 }
 
@@ -1794,14 +1836,35 @@ pub fn hook_output_ruled(call: &HookCall, context: &str, verdict: Option<&Rule>)
     if !context.is_empty() {
         specific["additionalContext"] = Value::String(context.to_string());
     }
+    let mut top = serde_json::Map::new();
     if let Some(r) = verdict {
         if call.event == "PreToolUse" {
-            specific["permissionDecision"] = Value::String(r.verdict.clone());
-            specific["permissionDecisionReason"] =
-                Value::String(format!("{} (seat rule `{}`)", r.reason, r.pattern));
+            // A runner that cannot ask runs the tool on an `ask`; the
+            // seat stops it and tells the agent to ask the person.
+            let (decision, reason) = if r.verdict == "ask" && !call.shape.asks() {
+                (
+                    "deny",
+                    format!(
+                        "ask the person before running this: {} (seat rule `{}`)",
+                        r.reason, r.pattern
+                    ),
+                )
+            } else {
+                (
+                    r.verdict.as_str(),
+                    format!("{} (seat rule `{}`)", r.reason, r.pattern),
+                )
+            };
+            specific["permissionDecision"] = Value::String(decision.to_string());
+            specific["permissionDecisionReason"] = Value::String(reason.clone());
+            if call.shape == HookShape::CamelCase {
+                top.insert("decision".into(), Value::String(decision.to_string()));
+                top.insert("reason".into(), Value::String(reason));
+            }
         }
     }
-    serde_json::json!({ "hookSpecificOutput": specific }).to_string() + "\n"
+    top.insert("hookSpecificOutput".into(), specific);
+    Value::Object(top).to_string() + "\n"
 }
 
 pub fn format_steps(steps: &[Step]) -> String {
@@ -7338,6 +7401,7 @@ pub fn policy_with_memory(argv: &[String]) -> Result<String> {
         event: "argv".into(),
         cue: line.clone(),
         session: None,
+        shape: HookShape::Asks,
     };
     let context = hook_context(&call, 5);
     // The rules are the law's memory: a deny or an ask fires before the
@@ -9106,6 +9170,7 @@ mod tests {
             event: "UserPromptSubmit".into(),
             cue: "Do you not remember to use uv for scripts?".into(),
             session: Some("corr-test".into()),
+            shape: HookShape::Asks,
         };
         let first = correction_nudge(&prompt).expect("a correction is nudged");
         assert!(first.contains("ljos prefer"), "{first}");
@@ -9114,6 +9179,7 @@ mod tests {
             event: "PreToolUse".into(),
             cue: "you should have used uv".into(),
             session: Some("corr-test".into()),
+            shape: HookShape::Asks,
         };
         assert!(
             correction_nudge(&tool).is_none(),
@@ -9123,6 +9189,7 @@ mod tests {
             event: "UserPromptSubmit".into(),
             cue: "add the timeline verb".into(),
             session: Some("corr-test-2".into()),
+            shape: HookShape::Asks,
         };
         assert!(correction_nudge(&plain).is_none());
     }
@@ -9441,7 +9508,8 @@ mod tests {
                 &HookCall {
                     event: "argv".into(),
                     cue: "ab".into(),
-                    session: None
+                    session: None,
+                    shape: HookShape::Asks,
                 },
                 8
             )
@@ -9570,10 +9638,47 @@ mod tests {
             event: "argv".into(),
             cue: "git push origin x".into(),
             session: None,
+            shape: HookShape::Asks,
         };
         assert!(
             hook_output_ruled(&argv, "", verdict_for(&rules, &argv.cue)).starts_with("ask: A push")
         );
+        // grok: camelCase in, a top-level decision out.
+        let grok = hook_call(
+            r#"{"hookEventName":"pre_tool_use","sessionId":"g-1","toolName":"run_terminal_command","toolInput":{"command":"git push --force"}}"#,
+        );
+        assert_eq!(grok.shape, HookShape::CamelCase);
+        assert_eq!(grok.event, "PreToolUse");
+        assert_eq!(grok.cue, "git push --force");
+        let v: Value = serde_json::from_str(
+            hook_output_ruled(&grok, "", verdict_for(&rules, &grok.cue)).trim(),
+        )
+        .unwrap();
+        assert_eq!(v["decision"], "deny");
+        assert!(v["reason"].as_str().unwrap().contains("Never force push"));
+        // An ask on a runner that cannot ask stops the tool.
+        let deny_only = hook_call(
+            r#"{"hook_event_name":"PreToolUse","session_id":"c-1","turn_id":"t-1","tool_name":"Bash","tool_input":{"command":"git push origin x"}}"#,
+        );
+        assert_eq!(deny_only.shape, HookShape::DenyOnly);
+        let v: Value = serde_json::from_str(
+            hook_output_ruled(&deny_only, "", verdict_for(&rules, &deny_only.cue)).trim(),
+        )
+        .unwrap();
+        assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny");
+        assert!(v["hookSpecificOutput"]["permissionDecisionReason"]
+            .as_str()
+            .unwrap()
+            .starts_with("ask the person before running this: A push"));
+        assert!(v.get("decision").is_none());
+        let asks = hook_call(
+            r#"{"hook_event_name":"PreToolUse","session_id":"k-1","tool_name":"Bash","tool_input":{"command":"git push origin x"}}"#,
+        );
+        let v: Value = serde_json::from_str(
+            hook_output_ruled(&asks, "", verdict_for(&rules, &asks.cue)).trim(),
+        )
+        .unwrap();
+        assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "ask");
         let steps = panel_steps("x-1", true, &[], &[]);
         assert!(steps.is_empty());
         let preds = vec![
