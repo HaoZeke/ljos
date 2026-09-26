@@ -279,7 +279,9 @@ under equal weights is a count; under calibrated rows it is not.
 - `no tracker ... N unpushed` in `doctor`: the tracker checkout holds
   commits origin does not. Closures on this host are invisible everywhere
   else. Push the tracker. A leftover `tracker-push-*.log` names the last
-  refusal when the push was refused.
+  refusal when the push was refused. The row also fails when another remote
+  of the tracker holds a different head of the branch, as of the last fetch;
+  seats that push to different remotes never see each other's claims.
 - `deedar: warning: this deed is signed by ed25519:...`: the host key is
   not a signer the store's `layout` lists, and `evidence` will refuse the
   deed. Add the printed `signer =` line to that file.

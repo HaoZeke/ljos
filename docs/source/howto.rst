@@ -341,6 +341,8 @@ tracker row names the root vissue resolved and where it came from, and fails
 when that root is relative, missing, or holds no prefix directory: a ticket
 filed there is invisible to every other seat. It also names how many commits
 the checkout holds that origin does not, and fails when that count sits
-through the push wait; a leftover refused-push log is named on the row. A
-missing claim graph is reported and is not a failure: the first claim
+through the push wait; a leftover refused-push log is named on the row. It
+also fails when another remote of the tracker holds a different head of the
+branch, as of the last fetch: two seats pushing to two remotes each read
+only their own writes. A missing claim graph is reported and is not a failure: the first claim
 creates it.

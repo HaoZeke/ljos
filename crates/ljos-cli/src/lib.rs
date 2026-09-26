@@ -5259,6 +5259,47 @@ fn last_push_refusal() -> Option<String> {
 /// fails the row, and a leftover refused-push log names the reason.
 pub fn tracker_git_drift(root: &Path) -> Option<(String, bool)> {
     let up = tracker_upstream(root)?;
+    let (state, ok) = unpushed_drift(root, &up)?;
+    match tracker_remote_split(root, &up) {
+        Some(split) => Some((format!("{state}; {split}"), false)),
+        None => Some((state, ok)),
+    }
+}
+
+/// The remotes of the tracker whose head of the upstream's branch differs
+/// from the upstream's, as of the last fetch. Two seats that push to two
+/// remotes of one tracker each read only their own writes, and every other
+/// row stays green while they do.
+fn tracker_remote_split(root: &Path, up: &str) -> Option<String> {
+    let (_, branch) = up.split_once('/')?;
+    let refs = git_ok_stdout(
+        root,
+        &[
+            "for-each-ref",
+            "--format=%(refname:short) %(objectname)",
+            "refs/remotes",
+        ],
+    )?;
+    let heads: Vec<(&str, &str)> = refs
+        .lines()
+        .filter_map(|l| l.trim().split_once(' '))
+        .filter(|(r, _)| r.split_once('/').is_some_and(|(_, b)| b == branch))
+        .collect();
+    let tip = heads.iter().find(|(r, _)| *r == up)?.1;
+    let off: Vec<&str> = heads
+        .iter()
+        .filter(|(_, o)| *o != tip)
+        .map(|(r, _)| *r)
+        .collect();
+    (!off.is_empty()).then(|| {
+        format!(
+            "{} differs from {up}; pull and push every remote until they agree",
+            off.join(", ")
+        )
+    })
+}
+
+fn unpushed_drift(root: &Path, up: &str) -> Option<(String, bool)> {
     let range = format!("{up}..HEAD");
     let count: u64 = git_ok_stdout(root, &["rev-list", "--count", &range])?
         .trim()
@@ -8864,6 +8905,62 @@ mod tests {
         run(&["config", "user.email", "seat@example.invalid"]);
         run(&["config", "user.name", "seat"]);
         run(&["config", "core.hooksPath", "/dev/null"]);
+    }
+
+    /// Two remotes of one tracker with different heads fail the row, and
+    /// agreeing again clears it.
+    #[test]
+    fn tracker_row_fails_when_two_remotes_disagree() {
+        let _env = env_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("work");
+        std::fs::create_dir_all(root.join("Software")).unwrap();
+        let git = |cwd: &std::path::Path, args: &[&str]| {
+            let o = std::process::Command::new("git")
+                .arg("-C")
+                .arg(cwd)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                o.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+        };
+        for bare in ["origin.git", "mirror.git"] {
+            git(dir.path(), &["init", "-q", "--bare", bare]);
+        }
+        git_scratch(&root);
+        std::fs::write(root.join("Software/.keep"), "").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-q", "-m", "seed"]);
+        for name in ["origin", "mirror"] {
+            let url = dir.path().join(format!("{name}.git"));
+            git(&root, &["remote", "add", name, url.to_str().unwrap()]);
+            git(&root, &["push", "-q", name, "HEAD:refs/heads/main"]);
+        }
+        git(&root, &["branch", "-q", "-M", "main"]);
+        git(&root, &["fetch", "-q", "--all"]);
+        git(&root, &["branch", "-q", "-u", "origin/main"]);
+        let (state, ok) = super::tracker_git_drift(&root).unwrap();
+        assert!(ok, "{state}");
+
+        std::fs::write(root.join("Software/.keep"), "one side\n").unwrap();
+        git(&root, &["commit", "-qam", "only origin"]);
+        git(&root, &["push", "-q", "origin", "main"]);
+        git(&root, &["fetch", "-q", "--all"]);
+        let (state, ok) = super::tracker_git_drift(&root).unwrap();
+        assert!(!ok, "{state}");
+        assert!(
+            state.contains("mirror/main differs from origin/main"),
+            "{state}"
+        );
+
+        git(&root, &["push", "-q", "mirror", "main"]);
+        git(&root, &["fetch", "-q", "--all"]);
+        let (state, ok) = super::tracker_git_drift(&root).unwrap();
+        assert!(ok, "{state}");
     }
 
     /// The tracker row names how many commits origin lacks, and fails when
