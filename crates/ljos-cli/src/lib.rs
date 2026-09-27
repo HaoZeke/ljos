@@ -100,6 +100,12 @@ pub struct Harness {
     /// nothing.
     #[serde(default)]
     pub probe: Vec<String>,
+    /// The names this runner's MCP client sends at initialize, when they are
+    /// not the runner's name: the seat is then the harness's name, so one
+    /// runner's memory, ballots and trust rows stay one voter instead of
+    /// scattering over `acme` and `acme-mcp-client`.
+    #[serde(default)]
+    pub clients: Vec<String>,
 }
 
 /// The plugins `ljos` carries for runners whose hooks are code, by name.
@@ -618,6 +624,9 @@ const LIBRARY_CLIENT_NAMES: &[&str] = &["mcp", "mcp-client", "client", "runner"]
 /// library's default; then the program above this server, else `runner`.
 fn seat_for_client(client: &str) -> String {
     let name = seat_slug(client);
+    if let Some(runner) = runner_for_client(&harnesses_path(), &name) {
+        return runner;
+    }
     if !LIBRARY_CLIENT_NAMES.contains(&name.as_str()) {
         return name;
     }
@@ -626,6 +635,21 @@ fn seat_for_client(client: &str) -> String {
         .find(|(_, comm)| !WRAPPERS.contains(&comm.as_str()))
         .map(|(pid, comm)| seat_slug(&program_name(pid, &comm)))
         .unwrap_or(name)
+}
+
+/// The harness a client name belongs to, by its `clients` list in the
+/// runners file.
+fn runner_for_client(file: &Path, slug: &str) -> Option<String> {
+    harnesses_from(file)
+        .ok()?
+        .harness
+        .into_iter()
+        .find_map(|h| {
+            h.clients
+                .iter()
+                .any(|c| seat_slug(c) == slug)
+                .then(|| seat_slug(&h.name))
+        })
 }
 
 /// The seat of a record another seat left under one of this process's
@@ -10932,6 +10956,29 @@ mod tests {
     }
 
     #[test]
+    fn a_client_name_listed_on_a_harness_is_that_runners_seat() {
+        let dir = std::env::temp_dir().join(format!("ljos-clients-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("harnesses.toml");
+        std::fs::write(
+            &file,
+            "[[harness]]\nname = \"acme\"\nclients = [\"acme-mcp-client\"]\n\n[[harness]]\nname = \"brio\"\nclients = [\"brio-coding-agent\"]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            runner_for_client(&file, "acme-mcp-client").as_deref(),
+            Some("acme")
+        );
+        assert_eq!(
+            runner_for_client(&file, &seat_slug("brio-coding-agent")).as_deref(),
+            Some("brio")
+        );
+        assert!(runner_for_client(&file, "acme-cli").is_none());
+        assert!(runner_for_client(&dir.join("absent.toml"), "acme-mcp-client").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn an_issues_tags_are_words_it_speaks_in() {
         let v: Value = serde_json::from_str(r#"{"tags":["Decision","sharing","memory"]}"#).unwrap();
         assert_eq!(tags_of(&v), vec!["decision", "sharing", "memory"]);
@@ -11452,6 +11499,7 @@ mod tests {
             plugin: None,
             plugin_template: None,
             probe: Vec::new(),
+            clients: Vec::new(),
         };
         assert_eq!(is_registered(&h, Path::new("/bin/ljos-mcp")), Some(true));
         let _ = std::fs::remove_dir_all(&dir);
