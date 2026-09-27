@@ -2138,7 +2138,7 @@ pub fn hook_trace(input: &str, call: &HookCall, subagent: Option<&str>) {
         "session": call.session,
         "subagent": subagent,
         "holder": holder_name(),
-        "tree_holder": seat_from_tree_records().map(|s| s.holder),
+        "tree_holder": runner_record_holders().first().cloned(),
         "held": subagent.and_then(|_| held_issue()),
     });
     use std::io::Write as _;
@@ -2151,6 +2151,26 @@ pub fn hook_trace(input: &str, call: &HookCall, subagent: Option<&str>) {
     }
 }
 
+/// The holders the seat records above this process name, nearest first,
+/// read without the conversation check `read_record` makes. A subagent's
+/// hooks run under its own session id inside its parent's runner, so the
+/// parent's record always looks like another conversation's there, and it
+/// is exactly the one a subagent needs.
+fn runner_record_holders() -> Vec<String> {
+    let mut out = Vec::new();
+    for (pid, _) in ancestry() {
+        let Ok(text) = std::fs::read_to_string(seat_record_path(pid)) else {
+            continue;
+        };
+        if let Some(holder) = text.lines().nth(1).map(str::trim).filter(|h| !h.is_empty()) {
+            if !out.iter().any(|h| h == holder) {
+                out.push(holder.to_string());
+            }
+        }
+    }
+    out
+}
+
 /// The issue this conversation's holder claimed last and still works: a
 /// subagent's hook runs under its parent's holder, so this is the work
 /// the subagent is a slice of.
@@ -2160,10 +2180,7 @@ pub fn held_issue() -> Option<String> {
     // were made under. A hook's environment can carry session variables
     // the server's did not, which hash to another holder that holds
     // nothing, so the record is asked first.
-    let mut holders: Vec<String> = seat_from_tree_records()
-        .map(|s| s.holder)
-        .into_iter()
-        .collect();
+    let mut holders: Vec<String> = runner_record_holders();
     let own = holder_name();
     if !holders.contains(&own) {
         holders.push(own);
