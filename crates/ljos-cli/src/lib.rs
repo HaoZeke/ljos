@@ -2887,7 +2887,30 @@ pub fn atom_body(kind: &str, text: &str, workspace: &str) -> Value {
         "text": text,
         "workspace": workspace,
         "entities": [format!("{SEAT_ENTITY}{}", seat_name())],
+        "source": atom_source(),
     })
+}
+
+/// Where a claim was written: the runner, the conversation, the host and,
+/// when the runner stamped one, the turn. An audit reads a claim's lineage
+/// here instead of guessing it from its entities.
+#[must_use]
+pub fn atom_source() -> Value {
+    let seat = whoami();
+    let mut source = serde_json::json!({
+        "harness": seat.seat,
+        "session": seat.holder,
+        "host": sync::host(),
+        "via": "ljos",
+    });
+    let turn = std::env::vars()
+        .filter(|(k, v)| k.ends_with("_TURN_ID") && !v.trim().is_empty())
+        .map(|(_, v)| v.trim().to_string())
+        .next();
+    if let Some(turn) = turn {
+        source["turn"] = Value::String(turn);
+    }
+    source
 }
 
 /// Add entities to a body without losing the seat's.
@@ -11746,6 +11769,10 @@ mod tests {
         assert_eq!(v["level"], "explicit");
         assert_eq!(v["text"], "the default fuse is CombMNZ");
         assert_eq!(v["workspace"], "ws");
+        // Every write says where it came from.
+        assert_eq!(v["source"]["via"], "ljos");
+        assert!(!v["source"]["host"].as_str().unwrap_or("").is_empty());
+        assert!(!v["source"]["session"].as_str().unwrap_or("").is_empty());
         // Every write names the seat that wrote it, and other entities join it.
         let seat = v["entities"][0].as_str().unwrap();
         assert!(seat.starts_with(SEAT_ENTITY), "{seat}");
