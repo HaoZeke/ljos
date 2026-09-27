@@ -3685,14 +3685,34 @@ pub fn personas_speaking_to(personas: &[Persona], words: &[String]) -> Vec<Perso
         .collect()
 }
 
-/// The words an issue speaks in: its title's topic words and the entities
-/// of the island its title activates.
+/// The words an issue speaks in: its title's topic words, its tags, and
+/// the entities of the island its title activates when that island is not
+/// weak.
 pub fn issue_words(issue: &str) -> Vec<String> {
-    let mut words = issue_title(issue)
-        .map(|t| topic_words(&t))
-        .unwrap_or_default();
-    words.extend(island_entities(issue).unwrap_or_default());
+    let title = issue_title(issue).unwrap_or_default();
+    let mut words = topic_words(&title);
+    // The tags the issue's author chose name its domains outright.
+    if let Ok(v) = tracker_show_json(issue) {
+        words.extend(tags_of(&v));
+    }
+    // A weak island is the pack's best-connected cluster, not what the title
+    // is about: its entities seated five course reviewers on a question
+    // about syncing memory. Only an island two scorers agreed on speaks.
+    if packset_island(&title, false).is_ok_and(|i| !i["weak"].as_bool().unwrap_or(false)) {
+        words.extend(island_entities(issue).unwrap_or_default());
+    }
     words
+}
+
+/// An issue's tags from its tracker record, lower-cased.
+fn tags_of(v: &Value) -> Vec<String> {
+    v["tags"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_lowercase)
+        .collect()
 }
 
 pub fn panel(issue: &str, out: &Path) -> Result<String> {
@@ -10909,6 +10929,13 @@ mod tests {
             "a matching generation is left alone"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_issues_tags_are_words_it_speaks_in() {
+        let v: Value = serde_json::from_str(r#"{"tags":["Decision","sharing","memory"]}"#).unwrap();
+        assert_eq!(tags_of(&v), vec!["decision", "sharing", "memory"]);
+        assert!(tags_of(&serde_json::json!({})).is_empty());
     }
 
     #[test]
