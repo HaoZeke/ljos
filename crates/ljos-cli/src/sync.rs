@@ -37,6 +37,26 @@ pub struct Scope {
 struct Local {
     #[serde(default)]
     default_scope: Option<String>,
+    /// The tracker repositories this machine shares, when more than the
+    /// tracker root: a machine can hold one scope's repository beside
+    /// another's.
+    #[serde(default)]
+    repos: Vec<String>,
+}
+
+fn local() -> Local {
+    std::fs::read_to_string(config_dir().join("sync.toml"))
+        .ok()
+        .and_then(|t| toml::from_str::<Local>(&t).ok())
+        .unwrap_or_default()
+}
+
+fn expand(path: &str) -> PathBuf {
+    match path.strip_prefix("~/") {
+        Some(rest) => std::env::var_os("HOME")
+            .map_or_else(|| PathBuf::from(path), |h| PathBuf::from(h).join(rest)),
+        None => PathBuf::from(path),
+    }
 }
 
 /// The entity an imported atom carries: which machine sent it.
@@ -134,10 +154,8 @@ pub fn scope_of_repo(root: &Path) -> Result<Option<Scope>> {
 }
 
 fn default_scope(repo_scope: &str) -> String {
-    std::fs::read_to_string(config_dir().join("sync.toml"))
-        .ok()
-        .and_then(|t| toml::from_str::<Local>(&t).ok())
-        .and_then(|l| l.default_scope)
+    local()
+        .default_scope
         .unwrap_or_else(|| repo_scope.to_string())
 }
 
@@ -514,7 +532,21 @@ fn commit_log(root: &Path, scope: &str) -> String {
 /// A scope file that does not parse, the pack not answering, or age
 /// refusing to seal.
 pub fn sync_repo(pull_import: bool, export_log: bool) -> Result<String> {
-    let root = tracker_root()?;
+    let listed = local().repos;
+    let roots: Vec<PathBuf> = if listed.is_empty() {
+        vec![tracker_root()?]
+    } else {
+        listed.iter().map(|r| expand(r)).collect()
+    };
+    let mut out = String::new();
+    for root in roots {
+        out.push_str(&sync_one(&root, pull_import, export_log)?);
+    }
+    Ok(out)
+}
+
+fn sync_one(root: &Path, pull_import: bool, export_log: bool) -> Result<String> {
+    let root = root.to_path_buf();
     let Some(scope) = scope_of_repo(&root)? else {
         return Ok(format!(
             "sync: {} names no scope; write .ljos/sync.toml with name and recipients (`ljos sync --key` prints this machine's)\n",
