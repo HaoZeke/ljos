@@ -5711,11 +5711,37 @@ fn last_push_refusal() -> Option<String> {
 /// fails the row, and a leftover refused-push log names the reason.
 pub fn tracker_git_drift(root: &Path) -> Option<(String, bool)> {
     let up = tracker_upstream(root)?;
-    let (state, ok) = unpushed_drift(root, &up)?;
-    match tracker_remote_split(root, &up) {
-        Some(split) => Some((format!("{state}; {split}"), false)),
-        None => Some((state, ok)),
+    let (mut state, mut ok) = unpushed_drift(root, &up)?;
+    if let Some(split) = tracker_remote_split(root, &up) {
+        state = format!("{state}; {split}");
+        ok = false;
     }
+    if let Some(missing) = tracker_merge_driver_missing(root) {
+        state = format!("{state}; {missing}");
+        ok = false;
+    }
+    Some((state, ok))
+}
+
+/// A tracker whose .gitattributes merges issues.org with vissue, in a clone
+/// that has no such driver configured. git then merges the file as text
+/// without a word, which is the failure the driver exists to prevent: the
+/// attribute travels with the repository, the driver's command does not.
+fn tracker_merge_driver_missing(root: &Path) -> Option<String> {
+    let top = git_ok_stdout(root, &["rev-parse", "--show-toplevel"])?;
+    let attrs = std::fs::read_to_string(Path::new(top.trim()).join(".gitattributes")).ok()?;
+    let named = attrs
+        .lines()
+        .any(|l| l.split_whitespace().any(|w| w == "merge=vissue"));
+    if !named {
+        return None;
+    }
+    let driver = git_ok_stdout(root, &["config", "--get", "merge.vissue.driver"]);
+    driver.filter(|d| !d.trim().is_empty()).is_none().then(|| {
+        ".gitattributes merges issues.org with vissue and this clone has no merge.vissue.driver; \
+         `vissue merge-driver --install` in the tracker registers it"
+            .to_string()
+    })
 }
 
 /// The remotes of the tracker whose head of the upstream's branch differs
@@ -10384,6 +10410,37 @@ mod tests {
             subagent_stop_reason("explore", None, true, false).is_none(),
             "no issue, no gate"
         );
+    }
+
+    #[test]
+    fn a_clone_without_the_named_merge_driver_is_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        git(&["init", "-q"]);
+        assert!(
+            tracker_merge_driver_missing(dir.path()).is_none(),
+            "no attribute, no row"
+        );
+        std::fs::write(
+            dir.path().join(".gitattributes"),
+            "issues.org merge=vissue\n",
+        )
+        .unwrap();
+        let said = tracker_merge_driver_missing(dir.path()).expect("named and missing");
+        assert!(said.contains("vissue merge-driver --install"), "{said}");
+        git(&[
+            "config",
+            "merge.vissue.driver",
+            "vissue merge-driver %O %A %B %P",
+        ]);
+        assert!(tracker_merge_driver_missing(dir.path()).is_none());
     }
 
     #[test]
