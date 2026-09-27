@@ -79,6 +79,15 @@ brief; each ends with `ljos vote ISSUE --for OPTION --as NAME`, then
 with fewer than two ballots. Put any choice with more than one defensible
 answer on an issue this way before building it.
 
+Memory crosses machines through the tracker repository. A repository
+whose `.ljos/sync.toml` names a scope and its age recipients carries one
+sealed log per machine under `.ljos/atoms/`. The sitting pulls and takes
+the other machines' logs before the island is walked; finish writes and
+pushes this machine's. `ljos sync --key` prints this machine's public key
+for a scope's recipients, and `ljos sync` runs both halves by hand. An
+atom goes to the scope its `scope:NAME` entity names, else the machine's
+`default_scope` in `~/.config/ljos/sync.toml`.
+
 No issue yet? `vissue q -p PROJECT "TITLE"` mints one and prints its id.
 Every piece of work has an issue before it has a claim.
 

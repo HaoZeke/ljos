@@ -11,6 +11,7 @@ use packset_client::{Hit, PacksetClient};
 use serde_json::Value;
 
 pub mod hud;
+pub mod sync;
 
 /// Working-core files this seat will print. Nothing else, and never write.
 pub const CARD_NAMES: &[&str] = &["USER.md", "MEMORY.md"];
@@ -5360,7 +5361,7 @@ fn git_ok_stdout(dir: &Path, args: &[&str]) -> Option<String> {
 /// Upstream of the tracker checkout: the configured `@{upstream}`, else
 /// `origin/HEAD`. Absent when the root is not a git checkout, or has no
 /// remote the doctor can count against.
-fn tracker_upstream(root: &Path) -> Option<String> {
+pub(crate) fn tracker_upstream(root: &Path) -> Option<String> {
     let inside = git_ok_stdout(root, &["rev-parse", "--is-inside-work-tree"])?;
     if inside.trim() != "true" {
         return None;
@@ -5480,7 +5481,7 @@ fn tracker_remote_split(root: &Path, up: &str) -> Option<String> {
 
 /// The remotes other than the upstream's that carry its branch, as
 /// (remote, branch). Names that would need quoting are left out.
-fn tracker_mirrors(root: &Path, up: &str) -> Option<Vec<(String, String)>> {
+pub(crate) fn tracker_mirrors(root: &Path, up: &str) -> Option<Vec<(String, String)>> {
     let (upstream, branch) = up.split_once('/')?;
     let plain = |s: &str| {
         !s.is_empty()
@@ -7427,6 +7428,10 @@ pub fn sitting_gated(
     if !healthy(&rows) {
         bail!("{out}sitting: a required habitat does not answer; nothing was claimed");
     }
+    // Other machines' memories of this scope arrive before the island is
+    // walked, or the sitting orients on half the seat.
+    out.push_str("== sync\n");
+    out.push_str(&sync::sync_repo(true, false).unwrap_or_else(|e| format!("sync: {e:#}\n")));
     out.push_str("== cards\n");
     out.push_str(&cards(cards_dir)?);
     out.push_str("== due\n");
@@ -7636,6 +7641,8 @@ pub fn finish(
         ));
     }
     out.push_str(&persist_tracker(issue, "finished"));
+    // What this sitting taught leaves the machine with the tracker.
+    out.push_str(&sync::sync_repo(false, true).unwrap_or_else(|e| format!("sync: {e:#}\n")));
     Ok(out)
 }
 

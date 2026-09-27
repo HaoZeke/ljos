@@ -80,6 +80,18 @@ enum Cmd {
         #[arg(long)]
         apply: bool,
     },
+    /// Share the seat's memory across machines through the tracker repository: pull and take other machines' sealed logs, then write and push this machine's.
+    Sync {
+        /// Print this machine's age public key (made on first use) for a scope's recipients, and stop.
+        #[arg(long)]
+        key: bool,
+        /// Only pull and take other machines' logs.
+        #[arg(long, conflicts_with = "export")]
+        import: bool,
+        /// Only write and push this machine's log.
+        #[arg(long)]
+        export: bool,
+    },
     /// What this seat's memory turns on: the claims most linked to, by a weighted PageRank over the pack's links.
     Hubs {
         /// Most hubs to print.
@@ -467,6 +479,21 @@ fn main() -> Result<()> {
         Cmd::Forget { id, why } => {
             let body = packset_forget(&id, why.as_deref())?;
             println!("{}", serde_json::to_string_pretty(&body)?);
+        }
+        Cmd::Sync {
+            key,
+            import,
+            export,
+        } => {
+            if key {
+                println!("{}", ljos_cli::sync::public_key()?);
+            } else {
+                let both = !import && !export;
+                print!(
+                    "{}",
+                    ljos_cli::sync::sync_repo(both || import, both || export)?
+                );
+            }
         }
         Cmd::Hubs { limit } => print!("{}", format_hubs(&packset_hubs(limit)?)),
         Cmd::Conflicts { limit } => print!("{}", conflicts(limit)?),
