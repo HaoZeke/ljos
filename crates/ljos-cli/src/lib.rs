@@ -6011,6 +6011,24 @@ pub fn review_summary(atoms: &[Value], now: &str) -> String {
     }
 }
 
+/// The due claims with the island's first, keeping each group's due
+/// order: the claims a sitting's work bears on are the ones its agent can
+/// grade from what it is about to read, rather than the oldest in the pack.
+#[must_use]
+pub fn due_on_island_first(due: Vec<Value>, island: &Value) -> Vec<Value> {
+    let on: std::collections::BTreeSet<&str> = island["island"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|a| a["id"].as_str())
+        .collect();
+    let (mut first, rest): (Vec<Value>, Vec<Value>) = due
+        .into_iter()
+        .partition(|a| a["id"].as_str().is_some_and(|id| on.contains(id)));
+    first.extend(rest);
+    first
+}
+
 /// How many due rows a sitting prints before the summary line.
 pub const SITTING_DUE: usize = 8;
 
@@ -6018,14 +6036,14 @@ pub const SITTING_DUE: usize = 8;
 pub const SITTING_TIMELINE: usize = 12;
 
 /// The review clock as a sitting prints it: a short prefix, then the summary.
-pub fn sitting_due_report() -> Result<String> {
+pub fn sitting_due_report(island: &Value) -> Result<String> {
     let client = pack()?;
     // The same sweep `ljos due` runs. A sitting is the clock's ordinary
     // opening; a review left due past twice its interval lapses here.
     let swept = client.sweep(&client.workspace()).ok();
     let atoms = atoms_lean(&client, &client.workspace()).context("due: GET /v1/atoms failed")?;
     let now = now_utc();
-    let due = due_of(&atoms, &now);
+    let due = due_on_island_first(due_of(&atoms, &now), island);
     let shown = due.len().min(SITTING_DUE);
     Ok(format!(
         "{}{}{}\n",
@@ -7520,13 +7538,13 @@ pub fn sitting_gated(
     out.push_str(&sync::sync_repo(true, false).unwrap_or_else(|e| format!("sync: {e:#}\n")));
     out.push_str("== cards\n");
     out.push_str(&cards(cards_dir)?);
-    out.push_str("== due\n");
-    out.push_str(&sitting_due_report()?);
     let title = issue_title(issue)?;
+    let island = packset_island(&title, false)?;
+    out.push_str("== due\n");
+    out.push_str(&sitting_due_report(&island)?);
     out.push_str(&format!("== island: {title}\n"));
     // The strongest eight: a sitting wants orientation, not the whole
     // cluster; `ljos island` prints it all.
-    let island = packset_island(&title, false)?;
     let mut top = island.clone();
     if let Some(rows) = top["island"].as_array_mut() {
         rows.truncate(8);
@@ -11306,6 +11324,21 @@ mod tests {
         assert_eq!(atom_kind("Remember").unwrap(), "lesson");
         assert_eq!(atom_kind("Prefer").unwrap(), "preference");
         assert!(atom_kind("extract").is_err());
+    }
+
+    #[test]
+    fn a_sitting_lists_the_due_claims_its_island_holds_first() {
+        let due = vec![
+            serde_json::json!({"id": "old", "due_at": "2026-09-01"}),
+            serde_json::json!({"id": "here", "due_at": "2026-09-05"}),
+            serde_json::json!({"id": "older", "due_at": "2026-08-01"}),
+        ];
+        let island = serde_json::json!({"island": [{"id": "here"}, {"id": "absent"}]});
+        let ids: Vec<String> = due_on_island_first(due, &island)
+            .iter()
+            .map(|a| a["id"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(ids, ["here", "old", "older"]);
     }
 
     #[test]
