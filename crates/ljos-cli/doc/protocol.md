@@ -86,7 +86,10 @@ the other machines' logs before the island is walked; finish writes and
 pushes this machine's. `ljos sync --key` prints this machine's public key
 for a scope's recipients, and `ljos sync` runs both halves by hand. An
 atom goes to the scope its `scope:NAME` entity names, else the machine's
-`default_scope` in `~/.config/ljos/sync.toml`.
+`default_scope` in `~/.config/ljos/sync.toml`. A lesson from `finish`
+takes the scope of the repository that holds its issue, and a
+`[projects]` table in that repository's `sync.toml` sends one project's
+lessons to another scope (`tools = "shared"`).
 
 No issue yet? `vissue q -p PROJECT "TITLE"` mints one and prints its id.
 Every piece of work has an issue before it has a claim.
