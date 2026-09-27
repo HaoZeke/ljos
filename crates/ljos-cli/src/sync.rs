@@ -328,9 +328,16 @@ pub struct Incoming {
     pub retired: Vec<String>,
 }
 
-/// Read one host's log against the texts taken from it last time.
+/// Read one host's log against the texts taken from it last time
+/// (`before`, for what it retired) and the texts from it this pack
+/// already holds (`held`, which are not posted again).
 #[must_use]
-pub fn incoming(plain: &str, host: &str, before: &BTreeSet<String>) -> Incoming {
+pub fn incoming(
+    plain: &str,
+    host: &str,
+    before: &BTreeSet<String>,
+    held: &BTreeSet<String>,
+) -> Incoming {
     let mut post = Vec::new();
     let mut now = BTreeSet::new();
     for line in plain.lines().filter(|l| !l.trim().is_empty()) {
@@ -341,7 +348,11 @@ pub fn incoming(plain: &str, host: &str, before: &BTreeSet<String>) -> Incoming 
         if text.is_empty() {
             continue;
         }
-        now.insert(crate::work_id(&text));
+        let id = crate::work_id(&text);
+        now.insert(id.clone());
+        if held.contains(&id) {
+            continue;
+        }
         if let Some(map) = atom.as_object_mut() {
             let mut entities: Vec<Value> = map
                 .get("entities")
@@ -426,9 +437,23 @@ pub fn import(root: &Path, scope: &Scope) -> Result<String> {
             ));
             continue;
         };
-        let got = incoming(&plain, &host, &read_taken(&scope.name, &host));
-        let (mut kept, mut refused) = (0usize, 0usize);
         let workspace = client.workspace();
+        // The pack names a posted atom afresh, so a text already taken
+        // from this host would be held twice; what is held is skipped.
+        let tag = sender_entity(&host);
+        let held: BTreeSet<String> = crate::atoms_lean(&client, &workspace)?
+            .iter()
+            .filter(|a| {
+                a["entities"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|e| e.as_str() == Some(tag.as_str()))
+            })
+            .filter_map(|a| a["text"].as_str().map(crate::work_id))
+            .collect();
+        let got = incoming(&plain, &host, &read_taken(&scope.name, &host), &held);
+        let (mut kept, mut refused) = (0usize, 0usize);
         for mut atom in got.post {
             if let Some(map) = atom.as_object_mut() {
                 map.insert("workspace".into(), Value::String(workspace.clone()));
@@ -440,7 +465,6 @@ pub fn import(root: &Path, scope: &Scope) -> Result<String> {
         }
         let mut retired = 0usize;
         if !got.retired.is_empty() {
-            let tag = sender_entity(&host);
             for atom in crate::atoms_lean(&client, &workspace)? {
                 let text = atom["text"].as_str().unwrap_or("");
                 let from_host = atom["entities"]
@@ -685,8 +709,15 @@ mod tests {
             atom("b", "new", &[])
         );
         let before: BTreeSet<String> = [crate::work_id("kept"), crate::work_id("dropped")].into();
-        let got = incoming(&plain, "rglat", &before);
+        let got = incoming(&plain, "rglat", &before, &BTreeSet::new());
         assert_eq!(got.post.len(), 2);
+        let again = incoming(&plain, "rglat", &before, &[crate::work_id("kept")].into());
+        assert_eq!(
+            again.post.len(),
+            1,
+            "a text already held is not posted again"
+        );
+        assert_eq!(again.post[0]["text"], "new");
         assert!(got.post.iter().all(|a| a.get("id").is_none()));
         assert!(got.post.iter().all(|a| a["entities"]
             .as_array()
