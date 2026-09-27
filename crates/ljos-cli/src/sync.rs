@@ -568,7 +568,13 @@ fn commit_log(root: &Path, scope: &str) -> String {
     }
     drop(held);
     let mut pushed = vec![];
-    if git(root, &["push", "-q"]).is_ok_and(|o| o.status.success()) {
+    // A push another host beat is merged and tried once more; left ahead,
+    // the next catch-up could only fast-forward and never would.
+    let pushed_first = git(root, &["push", "-q"]).is_ok_and(|o| o.status.success());
+    let pushed_after_merge = !pushed_first
+        && git(root, &["pull", "-q", "--no-rebase", "--no-edit"]).is_ok_and(|o| o.status.success())
+        && git(root, &["push", "-q"]).is_ok_and(|o| o.status.success());
+    if pushed_first || pushed_after_merge {
         pushed.push("upstream".to_string());
     }
     if let Some(up) = crate::tracker_upstream(root) {
@@ -609,8 +615,15 @@ fn catch_up(root: &Path) -> String {
     );
     let mut stuck = Vec::new();
     for r in refs {
-        let merged = git(root, &["merge", "-q", "--ff-only", &r]);
+        let forward = git(root, &["merge", "-q", "--ff-only", &r]);
+        if forward.is_ok_and(|o| o.status.success()) {
+            continue;
+        }
+        // Diverged: this host committed while another pushed. Merge, as the
+        // tracker's own push does; a merge that stops is undone and named.
+        let merged = git(root, &["merge", "-q", "--no-edit", &r]);
         if !merged.is_ok_and(|o| o.status.success()) {
+            let _ = git(root, &["merge", "--abort"]);
             stuck.push(r);
         }
     }
@@ -618,7 +631,7 @@ fn catch_up(root: &Path) -> String {
         String::new()
     } else {
         format!(
-            "sync: could not fast-forward to {}; `ljos doctor` names the split\n",
+            "sync: could not merge {}; `ljos doctor` names the split\n",
             stuck.join(", ")
         )
     }

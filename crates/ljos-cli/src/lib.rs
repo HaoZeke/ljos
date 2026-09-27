@@ -8101,7 +8101,12 @@ pub fn persist_tracker(issue: &str, verb: &str) -> String {
     let mirrors = tracker_upstream(dir)
         .and_then(|up| tracker_mirrors(dir, &up))
         .unwrap_or_default();
-    let mut script = String::from("git push -q; rc=$?");
+    // A push another host beat is merged, not left ahead: the next catch-up
+    // only fast-forwards, so a clone left diverged never recovered. A merge
+    // rather than a rebase, because other seats keep uncommitted edits in
+    // the same worktree; issues.org merges by heading through vissue.
+    let mut script =
+        String::from("git push -q || { git pull -q --no-rebase --no-edit && git push -q; }; rc=$?");
     for (remote, branch) in &mirrors {
         script.push_str(&format!(
             "; git push -q '{remote}' 'HEAD:refs/heads/{branch}' || rc=1"
