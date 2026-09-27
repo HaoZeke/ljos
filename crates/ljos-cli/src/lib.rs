@@ -2138,6 +2138,8 @@ pub fn hook_trace(input: &str, call: &HookCall, subagent: Option<&str>) {
         "session": call.session,
         "subagent": subagent,
         "holder": holder_name(),
+        "tree_holder": seat_from_tree_records().map(|s| s.holder),
+        "held": subagent.and_then(|_| held_issue()),
     });
     use std::io::Write as _;
     if let Ok(mut f) = std::fs::OpenOptions::new()
