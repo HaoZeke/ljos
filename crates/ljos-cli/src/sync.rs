@@ -450,6 +450,21 @@ pub fn import(root: &Path, scope: &Scope) -> Result<String> {
     Ok(out)
 }
 
+/// The scope of the repository that holds an issue, when it declares one.
+#[must_use]
+pub fn scope_for_issue(issue: &str) -> Option<String> {
+    let hit = vissue_core::Layout::resolve(None, None)
+        .and_then(vissue_core::Router::load)
+        .and_then(|router| router.find_by_id(issue))
+        .ok()?;
+    let root = hit
+        .path
+        .ancestors()
+        .find(|d| d.join(".git").exists())?
+        .to_path_buf();
+    scope_of_repo(&root).ok().flatten().map(|s| s.name)
+}
+
 /// The tracker repository this seat writes, its root directory.
 fn tracker_root() -> Result<PathBuf> {
     let layout = vissue_core::Layout::resolve(None, None).map_err(anyhow::Error::from)?;

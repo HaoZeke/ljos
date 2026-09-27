@@ -2716,6 +2716,32 @@ pub fn packset_write(label: &str, text: &str) -> Result<Value> {
     packset_write_as(label, text, None)
 }
 
+/// [`packset_write`] carrying a `scope:NAME` entity, so the claim travels
+/// with that scope's log rather than the machine's default.
+///
+/// # Errors
+///
+/// An empty text, an unknown label, or the pack refusing the claim.
+pub fn packset_write_scoped(label: &str, text: &str, scope: Option<&str>) -> Result<Value> {
+    let Some(scope) = scope.map(str::trim).filter(|s| !s.is_empty()) else {
+        return packset_write(label, text);
+    };
+    let client = pack()?;
+    let workspace = client.workspace();
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        bail!("{label}: empty text is not a claim");
+    }
+    let kind = atom_kind(label)?;
+    let mut atom = atom_body(kind, trimmed, &workspace);
+    add_entities(&mut atom, [format!("scope:{scope}")]);
+    with_writer(|| {
+        client
+            .post_atom(&atom)
+            .with_context(|| format!("{label}: POST /v1/atoms failed"))
+    })
+}
+
 /// The entity a persona's own claims carry, so a brief can find them.
 #[must_use]
 pub fn persona_entity(name: &str) -> String {
@@ -7567,7 +7593,10 @@ pub fn finish(
     let mut out = String::new();
     match lesson.map(str::trim).filter(|l| !l.is_empty()) {
         Some(text) => {
-            let body = packset_write("Remember", text)?;
+            // A lesson learned on an issue belongs to the scope of the
+            // repository that holds the issue, wherever it was written.
+            let scope = sync::scope_for_issue(issue);
+            let body = packset_write_scoped("Remember", text, scope.as_deref())?;
             out.push_str(&format!(
                 "remembered {}{}\n",
                 body.get("id").and_then(Value::as_str).unwrap_or("-"),
