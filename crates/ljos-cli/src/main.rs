@@ -657,6 +657,7 @@ fn main() -> Result<()> {
             std::io::stdin().read_to_string(&mut input)?;
             let call = hook_call(&input);
             let (subagent, stop_active, agent) = ljos_cli::hook_subagent(&input);
+            ljos_cli::hook_trace(&input, &call, subagent.as_deref());
             // A subagent about to stop is held once while its parent holds
             // an issue, so its result reaches the issue as a ballot or a
             // lesson instead of ending in the parent's context.

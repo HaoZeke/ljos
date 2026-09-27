@@ -2111,6 +2111,44 @@ pub fn hook_subagent(input: &str) -> (Option<String>, bool, String) {
     (kind, active, agent)
 }
 
+/// With `$XDG_RUNTIME_DIR/ljos/hook-trace` present, one line per hook call
+/// to `hook-trace.jsonl` beside it: the event as sent and as read, the
+/// payload's top-level key names, the session and subagent type. Key names
+/// only, never values, so a runner's hook contract can be read off a live
+/// session without storing what it said.
+pub fn hook_trace(input: &str, call: &HookCall, subagent: Option<&str>) {
+    let dir = runtime_dir();
+    if !dir.join("hook-trace").exists() {
+        return;
+    }
+    let v: Value = serde_json::from_str(input.trim()).unwrap_or(Value::Null);
+    let keys: Vec<&str> = v
+        .as_object()
+        .map(|m| m.keys().map(String::as_str).collect())
+        .unwrap_or_default();
+    let raw = v["hook_event_name"]
+        .as_str()
+        .or_else(|| v["hookEventName"].as_str())
+        .unwrap_or("");
+    let line = serde_json::json!({
+        "ts": now_utc(),
+        "event": call.event,
+        "raw": raw,
+        "keys": keys,
+        "session": call.session,
+        "subagent": subagent,
+        "holder": holder_name(),
+    });
+    use std::io::Write as _;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("hook-trace.jsonl"))
+    {
+        let _ = writeln!(f, "{line}");
+    }
+}
+
 /// The issue this conversation's holder claimed last and still works: a
 /// subagent's hook runs under its parent's holder, so this is the work
 /// the subagent is a slice of.
