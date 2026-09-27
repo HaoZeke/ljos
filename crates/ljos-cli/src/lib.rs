@@ -2260,6 +2260,20 @@ pub const DECISION_CUES: &[&str] = &[
     "option b",
 ];
 
+/// How much of a prompt the decision cues are looked for in.
+pub const DECISION_OPENING: usize = 400;
+
+/// Whether `cue` occurs in `text` ending at a word boundary, so `option a`
+/// does not fire on `option about`.
+fn cue_at_word_end(text: &str, cue: &str) -> bool {
+    text.match_indices(cue).any(|(i, _)| {
+        text[i + cue.len()..]
+            .chars()
+            .next()
+            .is_none_or(|c| !c.is_alphanumeric())
+    })
+}
+
 /// On a prompt that puts a choice, the lines that take it to a panel
 /// instead of one agent's opinion. Once a session, since one decision
 /// is usually argued over several prompts.
@@ -2267,8 +2281,11 @@ fn decision_nudge(call: &HookCall) -> Option<String> {
     if call.event != "UserPromptSubmit" {
         return None;
     }
-    let lower = format!(" {} ", call.cue.to_lowercase());
-    DECISION_CUES.iter().find(|c| lower.contains(*c))?;
+    // A question is put in the prompt's opening; a long pasted report that
+    // mentions options further down is not a choice put to the agent.
+    let opening: String = call.cue.chars().take(DECISION_OPENING).collect();
+    let lower = format!(" {} ", opening.to_lowercase());
+    DECISION_CUES.iter().find(|c| cue_at_word_end(&lower, c))?;
     let key = "decision-nudge".to_string();
     if seen_ids(call.session.as_deref()).contains(&key) {
         return None;
@@ -10537,6 +10554,23 @@ mod tests {
         .is_none());
         assert!(
             decision_nudge(&call("go with option 2", "dec-test-4", "UserPromptSubmit")).is_some()
+        );
+        assert!(
+            decision_nudge(&call(
+                "tell me the option about caching",
+                "dec-test-5",
+                "UserPromptSubmit"
+            ))
+            .is_none(),
+            "a cue ends at a word boundary"
+        );
+        let report = format!(
+            "{} should we keep it?",
+            "a long pasted report line. ".repeat(40)
+        );
+        assert!(
+            decision_nudge(&call(&report, "dec-test-6", "UserPromptSubmit")).is_none(),
+            "a cue past the opening is not a choice put to the agent"
         );
     }
 
