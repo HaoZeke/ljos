@@ -2716,16 +2716,20 @@ pub fn packset_write(label: &str, text: &str) -> Result<Value> {
     packset_write_as(label, text, None)
 }
 
-/// [`packset_write`] carrying a `scope:NAME` entity, so the claim travels
-/// with that scope's log rather than the machine's default.
+/// [`packset_write`] for a lesson learned on an issue: it carries an
+/// `issue:ID` entity naming where it was learned, and a `scope:NAME`
+/// entity when one is given, so the claim travels with that scope's log
+/// rather than the machine's default.
 ///
 /// # Errors
 ///
 /// An empty text, an unknown label, or the pack refusing the claim.
-pub fn packset_write_scoped(label: &str, text: &str, scope: Option<&str>) -> Result<Value> {
-    let Some(scope) = scope.map(str::trim).filter(|s| !s.is_empty()) else {
-        return packset_write(label, text);
-    };
+pub fn packset_write_scoped(
+    label: &str,
+    text: &str,
+    issue: &str,
+    scope: Option<&str>,
+) -> Result<Value> {
     let client = pack()?;
     let workspace = client.workspace();
     let trimmed = text.trim();
@@ -2734,7 +2738,11 @@ pub fn packset_write_scoped(label: &str, text: &str, scope: Option<&str>) -> Res
     }
     let kind = atom_kind(label)?;
     let mut atom = atom_body(kind, trimmed, &workspace);
-    add_entities(&mut atom, [format!("scope:{scope}")]);
+    let mut tags = vec![format!("issue:{}", issue.trim())];
+    if let Some(scope) = scope.map(str::trim).filter(|s| !s.is_empty()) {
+        tags.push(format!("scope:{scope}"));
+    }
+    add_entities(&mut atom, tags);
     with_writer(|| {
         client
             .post_atom(&atom)
@@ -7596,7 +7604,7 @@ pub fn finish(
             // A lesson learned on an issue belongs to the scope of the
             // repository that holds the issue, wherever it was written.
             let scope = sync::scope_for_issue(issue);
-            let body = packset_write_scoped("Remember", text, scope.as_deref())?;
+            let body = packset_write_scoped("Remember", text, issue, scope.as_deref())?;
             out.push_str(&format!(
                 "remembered {}{}\n",
                 body.get("id").and_then(Value::as_str).unwrap_or("-"),
