@@ -656,6 +656,34 @@ fn main() -> Result<()> {
             let mut input = String::new();
             std::io::stdin().read_to_string(&mut input)?;
             let call = hook_call(&input);
+            let (subagent, stop_active, agent) = ljos_cli::hook_subagent(&input);
+            // A subagent about to stop is held once while its parent holds
+            // an issue, so its result reaches the issue as a ballot or a
+            // lesson instead of ending in the parent's context.
+            if call.event == "SubagentStop" {
+                let kind = subagent.as_deref().unwrap_or("subagent");
+                let key = format!("subagent-gate:{agent}");
+                let seen = ljos_cli::seen_ids(call.session.as_deref());
+                if !seen.contains(&key) {
+                    let issue = ljos_cli::held_issue();
+                    let decision = issue.as_deref().is_some_and(|i| {
+                        ljos_cli::tracker_show_json(i).is_ok_and(|v| ljos_cli::is_decision(&v))
+                    });
+                    if let Some(reason) = ljos_cli::subagent_stop_reason(
+                        kind,
+                        issue.as_deref(),
+                        decision,
+                        stop_active,
+                    ) {
+                        ljos_cli::mark_seen(call.session.as_deref(), &[key]);
+                        println!(
+                            "{}",
+                            serde_json::json!({"decision": "block", "reason": reason})
+                        );
+                    }
+                }
+                return Ok(());
+            }
             // At the end of a session the memories it used fire together,
             // and there is nothing to say.
             if call.event == "SessionEnd" {
@@ -696,7 +724,26 @@ fn main() -> Result<()> {
             // event it actually delivers. PreToolUse / argv only decide.
             let context = match call.event.as_str() {
                 "PreToolUse" | "argv" => String::new(),
-                "PostToolUse" => take_hook_context(call.session.as_deref()),
+                "PostToolUse" => {
+                    let mut ctx = take_hook_context(call.session.as_deref());
+                    if let Some(kind) = subagent.as_deref() {
+                        let key = format!("subagent-brief:{agent}");
+                        if !ljos_cli::seen_ids(call.session.as_deref()).contains(&key) {
+                            if let Some(issue) = ljos_cli::held_issue() {
+                                let decision = ljos_cli::tracker_show_json(&issue)
+                                    .is_ok_and(|v| ljos_cli::is_decision(&v));
+                                ljos_cli::mark_seen(call.session.as_deref(), &[key]);
+                                let brief = ljos_cli::subagent_brief(kind, &issue, decision);
+                                ctx = if ctx.is_empty() {
+                                    brief
+                                } else {
+                                    format!("{brief}\n{ctx}")
+                                };
+                            }
+                        }
+                    }
+                    ctx
+                }
                 // A turn ending is not a session ending, and has nothing
                 // to say either.
                 "SessionStart" | "TurnEnd" => String::new(),

@@ -226,6 +226,15 @@ on terra: compile failed in the build step with linux/scc.h missing.
 Fix: the GCC 14 libsanitizer kernel headers patch." Not "verify the
 lock exists before proceeding": the next seat cannot act on that.
 
+- A subagent works under its parent's sitting and opens none of its
+  own. What it finds joins the parent's issue. A judgement between
+  options is `ljos vote ISSUE --for OPTION --as NAME`. A lesson still
+  true next time is `ljos remember "..." --as NAME`, and a finding is
+  `vissue note ISSUE "..."`. NAME is its persona, else its subagent
+  type. On a runner that fires subagent events, the hook names the
+  parent's issue on the subagent's first tool result. It keeps the
+  subagent working once at its stop while that issue is open.
+
 ## After the work
 
 One verb closes the sitting:

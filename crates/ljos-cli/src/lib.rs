@@ -1542,6 +1542,7 @@ pub const HOOK_MATCHERS: &[(&str, &str)] = &[
     ("PostToolUse", "*"),
     ("UserPromptSubmit", "*"),
     ("SessionEnd", "*"),
+    ("SubagentStop", "*"),
 ];
 
 /// One runner sends snake_case `hookEventName`; another sends
@@ -1560,6 +1561,7 @@ fn normalize_hook_event(raw: &str) -> &str {
         "user_prompt_submit" | "UserPromptSubmit" => "UserPromptSubmit",
         "session_end" | "SessionEnd" => "SessionEnd",
         "session_start" | "SessionStart" => "SessionStart",
+        "subagent_stop" | "SubagentStop" | "SubagentEnd" | "subagentStop" => "SubagentStop",
         other => other,
     }
 }
@@ -1579,6 +1581,7 @@ fn hook_events_of(h: &Harness) -> Vec<String> {
             "PostToolUse",
             "PreToolUse",
             "SessionEnd",
+            "SubagentStop",
         ]
         .into_iter()
         .map(str::to_string)
@@ -1880,7 +1883,7 @@ fn seen_path(session: &str) -> Option<PathBuf> {
     Some(dir.join(format!("hook-seen-{safe}")))
 }
 
-fn seen_ids(session: Option<&str>) -> std::collections::BTreeSet<String> {
+pub fn seen_ids(session: Option<&str>) -> std::collections::BTreeSet<String> {
     session
         .and_then(seen_path)
         .and_then(|p| std::fs::read_to_string(p).ok())
@@ -1976,7 +1979,7 @@ pub fn take_hook_context(session: Option<&str>) -> String {
     text
 }
 
-fn mark_seen(session: Option<&str>, ids: &[String]) {
+pub fn mark_seen(session: Option<&str>, ids: &[String]) {
     let Some(path) = session.and_then(seen_path) else {
         return;
     };
@@ -2079,6 +2082,98 @@ fn agreed(h: &Hit) -> bool {
         (Some(named), Some(of)) if of >= 2 => named >= 2,
         _ => true,
     }
+}
+
+/// What a hook call says about a subagent: its type when the call fired
+/// inside one (`subagentType`, or `agent_type`), and whether a stop gate
+/// already held it this turn (`stopHookActive`), and the agent's id when
+/// the runner shares one session between a parent and its subagents.
+#[must_use]
+pub fn hook_subagent(input: &str) -> (Option<String>, bool, String) {
+    let Ok(v) = serde_json::from_str::<Value>(input.trim()) else {
+        return (None, false, String::new());
+    };
+    let kind = v["subagentType"]
+        .as_str()
+        .or_else(|| v["subagent_type"].as_str())
+        .or_else(|| v["agent_type"].as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let active = v["stopHookActive"]
+        .as_bool()
+        .or_else(|| v["stop_hook_active"].as_bool())
+        .unwrap_or(false);
+    let agent = v["agent_id"]
+        .as_str()
+        .or_else(|| v["agentId"].as_str())
+        .unwrap_or("")
+        .to_string();
+    (kind, active, agent)
+}
+
+/// The issue this conversation's holder claimed last and still works: a
+/// subagent's hook runs under its parent's holder, so this is the work
+/// the subagent is a slice of.
+#[must_use]
+pub fn held_issue() -> Option<String> {
+    let holder = holder_name();
+    let out = run_captured("vissue", &["claims", "--by", &holder, "--json"]).ok()?;
+    let rows: Value = serde_json::from_str(&out.stdout).ok()?;
+    rows.as_array()?
+        .iter()
+        .filter(|c| c["state"].as_str() == Some("STARTED"))
+        .next_back()?["id"]
+        .as_str()
+        .map(str::to_string)
+}
+
+/// What a subagent is told on its first tool result: the issue its parent
+/// holds and how its result joins it. A subagent that is not told the
+/// issue cannot cast a ballot on it, and a sitting of its own would
+/// contend with its parent's.
+#[must_use]
+pub fn subagent_brief(kind: &str, issue: &str, decision: bool) -> String {
+    let judge = if decision {
+        format!("{issue} is a decision: end with your ballot, `ljos vote {issue} --for OPTION --as ROLE`.")
+    } else {
+        format!(
+            "A judgement between options is a ballot: `ljos vote {issue} --for OPTION --as ROLE`."
+        )
+    };
+    format!(
+        "You are a {kind} subagent working under {issue}, which your parent holds. Do not open a sitting \
+         on it. {judge} A lesson that will hold next time is `ljos remember \"...\" --as ROLE`; a \
+         finding is `vissue note {issue} \"...\"`. ROLE is a persona from `ljos personas` when one fits \
+         your task, else `{kind}`."
+    )
+}
+
+/// The stop gate for a subagent: once, when its parent holds an issue,
+/// the reason the subagent is kept working one more round. A gate that
+/// already held it this turn, or a parent holding nothing, lets it stop.
+#[must_use]
+pub fn subagent_stop_reason(
+    kind: &str,
+    issue: Option<&str>,
+    decision: bool,
+    active: bool,
+) -> Option<String> {
+    if active {
+        return None;
+    }
+    let issue = issue?;
+    Some(if decision {
+        format!(
+            "{issue} is a decision your parent holds. Before you stop, cast your ballot: \
+             `ljos vote {issue} --for OPTION --as ROLE` (ROLE: your persona, else `{kind}`)."
+        )
+    } else {
+        format!(
+            "You worked under {issue}. Before you stop: if your result settles a choice, \
+             `ljos vote {issue} --for OPTION --as ROLE`; if it taught something that holds next time, \
+             `ljos remember \"...\" --as ROLE`. Otherwise stop."
+        )
+    })
 }
 
 /// Phrases a person uses when the agent has forgotten something it was
@@ -10150,6 +10245,41 @@ mod tests {
             shape: HookShape::Asks,
         };
         assert!(correction_nudge(&plain).is_none());
+    }
+
+    #[test]
+    fn a_subagent_is_told_its_parents_issue_and_held_once_at_stop() {
+        let grok = r#"{"hookEventName":"subagent_stop","sessionId":"child","subagentType":"explore","stopHookActive":false}"#;
+        assert_eq!(
+            hook_subagent(grok),
+            (Some("explore".into()), false, String::new())
+        );
+        let shared = r#"{"hook_event_name":"SubagentStop","session_id":"p","agent_id":"a1","agent_type":"review","stop_hook_active":true}"#;
+        assert_eq!(
+            hook_subagent(shared),
+            (Some("review".into()), true, "a1".into())
+        );
+        assert_eq!(hook_subagent(r#"{"hook_event_name":"Stop"}"#).0, None);
+        let brief = subagent_brief("explore", "acme-12ab", true);
+        assert!(
+            brief.contains("Do not open a sitting") && brief.contains("ljos vote acme-12ab"),
+            "{brief}"
+        );
+        let decide = subagent_stop_reason("explore", Some("acme-12ab"), true, false).unwrap();
+        assert!(
+            decide.contains("decision") && decide.contains("--as ROLE"),
+            "{decide}"
+        );
+        let plain = subagent_stop_reason("explore", Some("acme-12ab"), false, false).unwrap();
+        assert!(plain.contains("Otherwise stop"), "{plain}");
+        assert!(
+            subagent_stop_reason("explore", Some("acme-12ab"), true, true).is_none(),
+            "held once"
+        );
+        assert!(
+            subagent_stop_reason("explore", None, true, false).is_none(),
+            "no issue, no gate"
+        );
     }
 
     #[test]
