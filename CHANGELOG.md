@@ -4,6 +4,60 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
+- `ljos sync` shares the seat's memory across machines through the tracker
+  repository. Each repository names a scope and its age recipients in
+  `.ljos/sync.toml`, and each machine writes one sealed log under
+  `.ljos/atoms/`. The sitting takes the other machines' logs before the
+  island, and finish writes this one's. A `[projects]` table sends one
+  project's lessons to another scope, and a finish lesson takes the scope
+  of the repository its issue lives in. An import skips texts it already
+  holds, and a clone another host pushed past merges instead of sticking.
+
+- A finish lesson names the issue it was learned on (`issue:ID`), and every
+  claim ljos writes carries `source`: the runner, the conversation, the host
+  and, when the runner sets one, the turn.
+
+- The hook answers each runner in the contract it speaks: grok's camel-case
+  fields, codex's deny-only verdicts and hermes's `pre_llm_call` context.
+  grok's hook file runs ljos by absolute path. `ljos onboard` installs
+  plugins for opencode and omp, whose hooks are code.
+
+- A conversation is one holder across nested runners and threads, a
+  runner's client names (for example `claude` and `claude-code`) are one
+  seat through the harness `clients` list, and a library's default client
+  name is no seat.
+
+- A subagent is told, on its first tool result, the issue its parent holds
+  and how its result joins it: a ballot `--as` its role, a lesson or a
+  note. grok's `SubagentStop` holds it once while that issue is open, and
+  asks for the ballot on a decision. The parent's issue is found under the
+  holder the runner's server recorded.
+
+- A decision issue binds `company-panel` in the sitting and writes one brief
+  per seated persona; `finish --close` refuses a decision with fewer than
+  two ballots. A prompt that puts a choice in its opening is sent to a
+  panel once a session. A panel seats personas by the issue's tags and by
+  its island only when the island is strong. When only specialists exist
+  and none matches, the five whose views use the issue's words most sit,
+  and a panel with nobody to seat says so and stops.
+
+- Every verb that writes the tracker commits and pushes it, to every remote
+  that carries the branch. Seats sharing one checkout queue their commits
+  under `ljos-commit.lock` and wait out another git process's `index.lock`.
+  A rejected push merges and pushes once more.
+
+- An `ljos-mcp` whose binary was replaced forwards each tool call to the
+  installed one, so an install reaches a running agent.
+
+- The doctor gains a host row (out-of-memory kills, the kernel, the ljos-mcp servers
+  and their memory), a probe row that checks a runner loads the ljos tools,
+  and tracker-row failures for remotes that disagree and for a clone that
+  lacks the merge driver its `.gitattributes` names.
+
+- The sitting's due list puts the claims its island holds first, unless the
+  island is weak. The timeline reads every store on the reader's local
+  day, and the pack is read without its vectors.
+
 - The doctor's tracker row names how many commits the checkout holds that
   origin does not. A count that has sat through the push wait fails the
   row; a leftover `tracker-push-*.log` from a refused push is named on it.
