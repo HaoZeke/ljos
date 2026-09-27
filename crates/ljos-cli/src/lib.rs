@@ -2116,15 +2116,28 @@ pub fn hook_subagent(input: &str) -> (Option<String>, bool, String) {
 /// the subagent is a slice of.
 #[must_use]
 pub fn held_issue() -> Option<String> {
-    let holder = holder_name();
-    let out = run_captured("vissue", &["claims", "--by", &holder, "--json"]).ok()?;
-    let rows: Value = serde_json::from_str(&out.stdout).ok()?;
-    rows.as_array()?
-        .iter()
-        .filter(|c| c["state"].as_str() == Some("STARTED"))
-        .next_back()?["id"]
-        .as_str()
-        .map(str::to_string)
+    // The record the runner's own server left names the holder its claims
+    // were made under. A hook's environment can carry session variables
+    // the server's did not, which hash to another holder that holds
+    // nothing, so the record is asked first.
+    let mut holders: Vec<String> = seat_from_tree_records()
+        .map(|s| s.holder)
+        .into_iter()
+        .collect();
+    let own = holder_name();
+    if !holders.contains(&own) {
+        holders.push(own);
+    }
+    holders.iter().find_map(|holder| {
+        let out = run_captured("vissue", &["claims", "--by", holder, "--json"]).ok()?;
+        let rows: Value = serde_json::from_str(&out.stdout).ok()?;
+        rows.as_array()?
+            .iter()
+            .filter(|c| c["state"].as_str() == Some("STARTED"))
+            .next_back()?["id"]
+            .as_str()
+            .map(str::to_string)
+    })
 }
 
 /// What a subagent is told on its first tool result: the issue its parent
@@ -2141,7 +2154,7 @@ pub fn subagent_brief(kind: &str, issue: &str, decision: bool) -> String {
         )
     };
     format!(
-        "You are a {kind} subagent working under {issue}, which your parent holds. Do not open a sitting \
+        "You are a subagent ({kind}) working under {issue}, which your parent holds. Do not open a sitting \
          on it. {judge} A lesson that will hold next time is `ljos remember \"...\" --as ROLE`; a \
          finding is `vissue note {issue} \"...\"`. ROLE is a persona from `ljos personas` when one fits \
          your task, else `{kind}`."
