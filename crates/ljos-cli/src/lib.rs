@@ -1952,12 +1952,24 @@ pub fn hook_context(call: &HookCall, limit: usize) -> String {
     if cue.len() < 3 {
         return String::new();
     }
+    // The nudges answer what the prompt says, not what the pack holds, so
+    // a prompt the pack knows nothing about still gets them.
+    let mut nudge = due_nudge(call);
+    for extra in [correction_nudge(call), decision_nudge(call)]
+        .into_iter()
+        .flatten()
+    {
+        if !nudge.is_empty() {
+            nudge.push('\n');
+        }
+        nudge.push_str(&extra);
+    }
     let Ok(hits) = packset_search(cue) else {
-        return String::new();
+        return nudge;
     };
     let top = hits.iter().map(|h| h.score).fold(0.0_f64, f64::max);
     if top <= 0.0 {
-        return String::new();
+        return nudge;
     }
     let seen = seen_ids(call.session.as_deref());
     let mut rows: Vec<&Hit> = hits
@@ -1985,13 +1997,6 @@ pub fn hook_context(call: &HookCall, limit: usize) -> String {
     let split = rows.iter().filter(|h| h.kind == "preference").count();
     rows[split..].sort_by_key(|h| days_of_stamp(h.ts.as_deref()).unwrap_or(i64::MAX));
     let lines: Vec<String> = rows.iter().map(|h| hit_line(h, &now)).collect();
-    let mut nudge = due_nudge(call);
-    if let Some(c) = correction_nudge(call) {
-        if !nudge.is_empty() {
-            nudge.push('\n');
-        }
-        nudge.push_str(&c);
-    }
     if lines.is_empty() {
         return nudge;
     }
@@ -2065,6 +2070,53 @@ fn correction_nudge(call: &HookCall) -> Option<String> {
         "This prompt reads as a correction. Before the work: write what it corrects as one \
          `ljos prefer \"...\"` (a standing choice) or `ljos remember \"...\"` (a lesson), \
          so the pack holds it and the hook can raise it next time."
+            .to_string(),
+    )
+}
+
+/// Phrases that put a choice to the agent. A choice with more than one
+/// defensible answer is a ballot, and a ballot needs an issue to sit on.
+pub const DECISION_CUES: &[&str] = &[
+    "should we",
+    "should i ",
+    "or should",
+    "which is better",
+    "which one",
+    "which approach",
+    "which option",
+    "pros and cons",
+    "trade-off",
+    "tradeoff",
+    " versus ",
+    " vs ",
+    " vs. ",
+    "what do you recommend",
+    "do you think we",
+    "option 1",
+    "option 2",
+    "option a",
+    "option b",
+];
+
+/// On a prompt that puts a choice, the lines that take it to a panel
+/// instead of one agent's opinion. Once a session, since one decision
+/// is usually argued over several prompts.
+fn decision_nudge(call: &HookCall) -> Option<String> {
+    if call.event != "UserPromptSubmit" {
+        return None;
+    }
+    let lower = format!(" {} ", call.cue.to_lowercase());
+    DECISION_CUES.iter().find(|c| lower.contains(*c))?;
+    let key = "decision-nudge".to_string();
+    if seen_ids(call.session.as_deref()).contains(&key) {
+        return None;
+    }
+    mark_seen(call.session.as_deref(), &[key]);
+    Some(
+        "This prompt puts a choice. Before choosing: put it on an issue whose body has an \
+         `Options: A, B` line, then `ljos sitting ISSUE` writes one brief per persona the \
+         title names; start one subagent per brief, each casting `ljos vote ISSUE --for \
+         OPTION --as NAME`, and settle with `ljos consensus ISSUE`."
             .to_string(),
     )
 }
@@ -10022,6 +10074,41 @@ mod tests {
             shape: HookShape::Asks,
         };
         assert!(correction_nudge(&plain).is_none());
+    }
+
+    #[test]
+    fn a_choice_is_sent_to_a_panel_once_a_session() {
+        let _g = env_guard();
+        let dir = std::env::temp_dir().join(format!("ljos-dec-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", &dir) };
+        let call = |cue: &str, session: &str, event: &str| HookCall {
+            event: event.into(),
+            cue: cue.into(),
+            session: Some(session.into()),
+            shape: HookShape::Asks,
+        };
+        let prompt = call(
+            "should we seal with age or gpg?",
+            "dec-test",
+            "UserPromptSubmit",
+        );
+        let first = decision_nudge(&prompt).expect("a choice is nudged");
+        assert!(
+            first.contains("Options:") && first.contains("--as NAME"),
+            "{first}"
+        );
+        assert!(decision_nudge(&prompt).is_none(), "once a session");
+        assert!(decision_nudge(&call("age vs gpg", "dec-test-2", "PreToolUse")).is_none());
+        assert!(decision_nudge(&call(
+            "add the timeline verb",
+            "dec-test-3",
+            "UserPromptSubmit"
+        ))
+        .is_none());
+        assert!(
+            decision_nudge(&call("go with option 2", "dec-test-4", "UserPromptSubmit")).is_some()
+        );
     }
 
     #[test]
