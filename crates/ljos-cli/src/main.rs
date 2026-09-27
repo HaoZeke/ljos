@@ -695,7 +695,7 @@ fn main() -> Result<()> {
             // exist.
             let predictions = pack()
                 .and_then(|c| {
-                    c.atoms_as_of(&c.workspace(), None)
+                    ljos_cli::atoms_lean(&c, &c.workspace())
                         .context("consensus: GET /v1/atoms failed")
                 })
                 .map(|atoms| predictions_of(&atoms, &id))

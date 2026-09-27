@@ -2058,7 +2058,7 @@ fn due_nudge(call: &HookCall) -> String {
     let Ok(client) = pack() else {
         return String::new();
     };
-    let Ok(atoms) = client.atoms_as_of(&client.workspace(), None) else {
+    let Ok(atoms) = atoms_lean(&client, &client.workspace()) else {
         return String::new();
     };
     let due = due_of(&atoms, &now_utc()).len();
@@ -2565,6 +2565,31 @@ fn with_writer<T>(op: impl Fn() -> Result<T>) -> Result<T> {
         }
         Err(err) => Err(err),
     }
+}
+
+/// The pack's live atoms without their dense vectors. Every reader here
+/// wants texts, kinds, review clocks, trust or rules; the vectors are nine
+/// tenths of the listing, and parsing them grew one ljos-mcp from 10 to
+/// 66 MB and kept it. A writer older than `embedding=omit` sends them
+/// anyway, and the answer is the same.
+///
+/// # Errors
+///
+/// The pack not answering, or an answer that is not atoms.
+pub fn atoms_lean(client: &PacksetClient, workspace: &str) -> Result<Vec<Value>> {
+    let url = format!("{}/v1/atoms", client.base());
+    let mut body: Value = ureq::get(&url)
+        .query("workspace", workspace)
+        .query("embedding", "omit")
+        .timeout(std::time::Duration::from_secs(30))
+        .call()
+        .map_err(|e| anyhow::anyhow!("{url}: {e}"))?
+        .into_json()?;
+    let atoms = body
+        .get_mut("atoms")
+        .map(Value::take)
+        .unwrap_or(Value::Array(Vec::new()));
+    Ok(serde_json::from_value(atoms)?)
 }
 
 pub fn pack() -> Result<PacksetClient> {
@@ -3834,9 +3859,7 @@ pub fn rules_of(atoms: &[Value]) -> Vec<Rule> {
 /// The rules in the seat's pack.
 pub fn rules_from_pack() -> Result<Vec<Rule>> {
     let client = pack()?;
-    let atoms = client
-        .atoms_as_of(&client.workspace(), None)
-        .context("rules: GET /v1/atoms failed")?;
+    let atoms = atoms_lean(&client, &client.workspace()).context("rules: GET /v1/atoms failed")?;
     Ok(rules_of(&atoms))
 }
 
@@ -3920,9 +3943,7 @@ pub fn island_entities(issue: &str) -> Result<Vec<String>> {
         return Ok(Vec::new());
     }
     let client = pack()?;
-    let atoms = client
-        .atoms_as_of(&client.workspace(), None)
-        .context("island: GET /v1/atoms failed")?;
+    let atoms = atoms_lean(&client, &client.workspace()).context("island: GET /v1/atoms failed")?;
     let mut count: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     for atom in &atoms {
         if atom
@@ -4288,9 +4309,7 @@ pub fn learn_and_write(
     forecasts: &[Forecast],
 ) -> Result<LearnedState> {
     let client = pack()?;
-    let atoms = client
-        .atoms_as_of(&client.workspace(), None)
-        .context("learn: GET /v1/atoms failed")?;
+    let atoms = atoms_lean(&client, &client.workspace()).context("learn: GET /v1/atoms failed")?;
     let (rows, records) = learn_record(ballots, outcome, &records_from_atoms(&atoms), about)?;
     let mut calibration = calibration_from_atoms(&atoms);
     for forecast in forecasts {
@@ -4727,9 +4746,7 @@ pub fn learn_shared(
 pub fn trust_from_pack() -> Result<Vec<Trust>> {
     let client = pack()?;
     let workspace = client.workspace();
-    let atoms = client
-        .atoms_as_of(&workspace, None)
-        .context("trust: GET /v1/atoms failed")?;
+    let atoms = atoms_lean(&client, &workspace).context("trust: GET /v1/atoms failed")?;
     Ok(trust_rows(&atoms))
 }
 
@@ -5875,9 +5892,7 @@ pub fn sitting_due_report() -> Result<String> {
     // The same sweep `ljos due` runs. A sitting is the clock's ordinary
     // opening; a review left due past twice its interval lapses here.
     let swept = client.sweep(&client.workspace()).ok();
-    let atoms = client
-        .atoms_as_of(&client.workspace(), None)
-        .context("due: GET /v1/atoms failed")?;
+    let atoms = atoms_lean(&client, &client.workspace()).context("due: GET /v1/atoms failed")?;
     let now = now_utc();
     let due = due_of(&atoms, &now);
     let shown = due.len().min(SITTING_DUE);
@@ -5895,9 +5910,7 @@ pub fn due_report() -> Result<String> {
     // The sweep runs first, so a review left due past twice its interval is
     // lapsed or forgotten before the list is read, and the report says so.
     let swept = client.sweep(&client.workspace()).ok();
-    let atoms = client
-        .atoms_as_of(&client.workspace(), None)
-        .context("due: GET /v1/atoms failed")?;
+    let atoms = atoms_lean(&client, &client.workspace()).context("due: GET /v1/atoms failed")?;
     let now = now_utc();
     Ok(format!(
         "{}{}{}\n",
@@ -5928,9 +5941,7 @@ pub fn format_sweep(report: Option<&Value>) -> String {
 /// What the pack holds for review now.
 pub fn due() -> Result<Vec<Value>> {
     let client = pack()?;
-    let atoms = client
-        .atoms_as_of(&client.workspace(), None)
-        .context("due: GET /v1/atoms failed")?;
+    let atoms = atoms_lean(&client, &client.workspace()).context("due: GET /v1/atoms failed")?;
     Ok(due_of(&atoms, &now_utc()))
 }
 
@@ -5938,9 +5949,7 @@ pub fn due() -> Result<Vec<Value>> {
 /// clock line. Read-only: the sweep stays on `ljos due` and on a sitting.
 pub fn due_page() -> Result<(Vec<Value>, usize, String)> {
     let client = pack()?;
-    let atoms = client
-        .atoms_as_of(&client.workspace(), None)
-        .context("due: GET /v1/atoms failed")?;
+    let atoms = atoms_lean(&client, &client.workspace()).context("due: GET /v1/atoms failed")?;
     let now = now_utc();
     let all = due_of(&atoms, &now);
     let total = all.len();
@@ -6096,9 +6105,7 @@ pub fn readings_of(atoms: &[Value]) -> Vec<Reading> {
 /// The live readings in the seat's pack.
 pub fn habits() -> Result<Vec<Reading>> {
     let client = pack()?;
-    let atoms = client
-        .atoms_as_of(&client.workspace(), None)
-        .context("habit: GET /v1/atoms failed")?;
+    let atoms = atoms_lean(&client, &client.workspace()).context("habit: GET /v1/atoms failed")?;
     Ok(readings_of(&atoms))
 }
 
@@ -6121,9 +6128,7 @@ pub fn habit(
     }
     let client = pack()?;
     let workspace = client.workspace();
-    let atoms = client
-        .atoms_as_of(&workspace, None)
-        .context("habit: GET /v1/atoms failed")?;
+    let atoms = atoms_lean(&client, &workspace).context("habit: GET /v1/atoms failed")?;
     let prev = readings_of(&atoms).into_iter().find(|r| r.name == name);
     let now = now_utc();
     let mut atom = atom_body("habit", &habit_text(name, value, unit, source), &workspace);
@@ -6440,9 +6445,7 @@ pub fn conflicts(limit: usize) -> Result<String> {
     let v: Value =
         serde_json::from_str(&said.stdout).context("conflicts: landscape printed no JSON")?;
     let now = now_utc();
-    let atoms = client
-        .atoms_as_of(&client.workspace(), None)
-        .unwrap_or_default();
+    let atoms = atoms_lean(&client, &client.workspace()).unwrap_or_default();
     let stamp_of = |id: &str| -> Option<String> {
         atoms
             .iter()

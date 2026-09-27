@@ -297,9 +297,8 @@ fn issue_of(cue: &str) -> String {
 
 fn load_pack_panes() -> Result<(Vec<DueRow>, GraphLayout, bool, String)> {
     let client = ljos_cli::pack()?;
-    let atoms = client
-        .atoms_as_of(&client.workspace(), None)
-        .context("pack: GET /v1/atoms failed")?;
+    let atoms =
+        ljos_cli::atoms_lean(&client, &client.workspace()).context("pack: GET /v1/atoms failed")?;
     let now = ljos_cli::now_utc();
     let due = ljos_cli::due_of(&atoms, &now)
         .iter()

@@ -1176,8 +1176,7 @@ impl LjosServer {
         // trust rows exist.
         let predictions = pack()
             .and_then(|c| {
-                c.atoms_as_of(&c.workspace(), None)
-                    .context("consensus: GET /v1/atoms failed")
+                ljos_cli::atoms_lean(&c, &c.workspace()).context("consensus: GET /v1/atoms failed")
             })
             .map(|atoms| predictions_of(&atoms, &args.issue))
             .unwrap_or_default();
