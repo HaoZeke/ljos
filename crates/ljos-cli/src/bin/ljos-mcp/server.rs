@@ -1887,6 +1887,48 @@ impl LjosServer {
     }
 }
 
+/// Set on the one-call child a stale server forwards to, so the child
+/// answers itself rather than forwarding again. Its seat record is keyed
+/// on the stale server's process, which holds none of the runner's.
+pub const FORWARDED: &str = "LJOS_MCP_FORWARDED";
+
+/// The installed binary, when the one this server runs from has been
+/// replaced on disk since it started. A runner keeps its server for the
+/// whole conversation, so without this an install reached no running agent.
+fn replaced_binary() -> Option<PathBuf> {
+    if std::env::var_os(FORWARDED).is_some() {
+        return None;
+    }
+    let exe = std::fs::read_link("/proc/self/exe").ok()?;
+    let path = exe.to_str()?.strip_suffix(" (deleted)")?;
+    let path = PathBuf::from(path);
+    path.is_file().then_some(path)
+}
+
+/// Answer one tool call with the installed binary, typed for the server.
+fn forward_call(
+    fresh: &Path,
+    init: Option<serde_json::Value>,
+    request: rmcp::model::CallToolRequestParams,
+    meta: serde_json::Map<String, serde_json::Value>,
+) -> Result<rmcp::model::CallToolResponse, McpError> {
+    let fail = |e: &dyn std::fmt::Display| {
+        McpError::internal_error(format!("forward to {}: {e}", fresh.display()), None)
+    };
+    let mut params = serde_json::to_value(&request).map_err(|e| fail(&e))?;
+    if !meta.is_empty() {
+        params["_meta"] = serde_json::Value::Object(meta);
+    }
+    let answer = ljos_cli::mcp_forward(fresh, FORWARDED, init, params).map_err(|e| fail(&e))?;
+    if let Some(err) = answer.get("error") {
+        return Err(serde_json::from_value(err.clone())
+            .unwrap_or_else(|_| McpError::internal_error(err.to_string(), None)));
+    }
+    serde_json::from_value::<rmcp::model::CallToolResult>(answer["result"].clone())
+        .map(Into::into)
+        .map_err(|e| fail(&e))
+}
+
 #[tool_handler]
 #[prompt_handler(router = Self::prompt_router())]
 impl ServerHandler for LjosServer {
@@ -1936,6 +1978,19 @@ impl ServerHandler for LjosServer {
         request: rmcp::model::CallToolRequestParams,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::CallToolResponse, McpError> {
+        if let Some(fresh) = replaced_binary() {
+            let init = context
+                .peer
+                .peer_info()
+                .and_then(|c| serde_json::to_value(&*c).ok());
+            let meta = match serde_json::to_value(&context.meta.0) {
+                Ok(serde_json::Value::Object(map)) => map,
+                _ => serde_json::Map::new(),
+            };
+            return tokio::task::spawn_blocking(move || forward_call(&fresh, init, request, meta))
+                .await
+                .map_err(|e| McpError::internal_error(format!("forward: {e}"), None))?;
+        }
         let thread = thread_in_meta(&context.meta.0);
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
         ljos_cli::as_thread(thread, Self::tool_router().call(tcc)).await

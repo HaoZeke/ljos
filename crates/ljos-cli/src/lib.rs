@@ -530,6 +530,60 @@ pub fn runner_pid() -> u32 {
     u32::try_from(ppid).unwrap_or(0)
 }
 
+/// One tool call answered by a fresh `ljos-mcp`: start `program` with
+/// `marker` set, send it the client's initialize (`init`, or a plain one),
+/// the initialized notification and `tools/call` with `params`, and return
+/// the JSON-RPC answer to the call, `result` or `error`.
+///
+/// # Errors
+///
+/// The program not starting, or closing before it answers.
+pub fn mcp_forward(
+    program: &Path,
+    marker: &str,
+    init: Option<Value>,
+    params: Value,
+) -> Result<Value> {
+    use std::io::{BufRead, Write};
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(program)
+        .env(marker, "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .with_context(|| format!("{}: spawn", program.display()))?;
+    let init = init.unwrap_or_else(|| {
+        serde_json::json!({"protocolVersion": "2025-06-18", "capabilities": {},
+            "clientInfo": {"name": "runner", "version": "0"}})
+    });
+    let lines = [
+        serde_json::json!({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": init}),
+        serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params}),
+    ];
+    {
+        let stdin = child.stdin.as_mut().context("forward: stdin closed")?;
+        for line in &lines {
+            writeln!(stdin, "{line}")?;
+        }
+    }
+    let stdout = child.stdout.take().context("forward: stdout closed")?;
+    let mut answer = None;
+    for line in std::io::BufReader::new(stdout).lines() {
+        let Ok(v) = serde_json::from_str::<Value>(&line?) else {
+            continue;
+        };
+        if v["id"] == serde_json::json!(1) {
+            answer = Some(v);
+            break;
+        }
+    }
+    drop(child.stdin.take());
+    let _ = child.wait();
+    answer.with_context(|| format!("{}: closed without answering the call", program.display()))
+}
+
 /// The conversation ids a runner stamped into this environment, by key:
 /// every `*_SESSION_ID` but the login's, sorted so two processes with the
 /// same variables agree on the first.
