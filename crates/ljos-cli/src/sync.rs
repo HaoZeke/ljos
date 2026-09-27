@@ -531,6 +531,13 @@ fn commit_log(root: &Path, scope: &str) -> String {
         format!(".ljos/atoms/{host}.jsonl.age"),
         format!(".ljos/atoms/{host}.digest"),
     ];
+    // The same lock the tracker commits take: one checkout, many seats.
+    let common = git(root, &["rev-parse", "--git-common-dir"])
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| root.join(String::from_utf8_lossy(&o.stdout).trim()))
+        .unwrap_or_else(|| root.join(".git"));
+    let held = crate::CommitLock::acquire(&common.join("ljos-commit.lock"));
     let mut add = vec!["add", "--"];
     add.extend(files.iter().map(String::as_str));
     if git(root, &add).map_or(true, |o| !o.status.success()) {
@@ -559,6 +566,7 @@ fn commit_log(root: &Path, scope: &str) -> String {
         }
         Err(e) => return format!("sync: git: {e}\n"),
     }
+    drop(held);
     let mut pushed = vec![];
     if git(root, &["push", "-q"]).is_ok_and(|o| o.status.success()) {
         pushed.push("upstream".to_string());

@@ -235,6 +235,11 @@ lock exists before proceeding": the next seat cannot act on that.
   parent's issue on the subagent's first tool result. It keeps the
   subagent working once at its stop while that issue is open.
 
+- Tracker and sync commits queue under `ljos-commit.lock` in the git
+  directory, and a commit waits out another git process's `index.lock`.
+  Never wrap a verb in a lock of your own, and never stash, reset or
+  check out files another seat is editing to get a commit through.
+
 ## After the work
 
 One verb closes the sitting:

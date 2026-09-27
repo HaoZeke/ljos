@@ -7906,6 +7906,39 @@ pub fn finish(
     Ok(out)
 }
 
+/// An exclusive advisory lock on a file, held until dropped. Taking it
+/// blocks; a lock that cannot be opened is no lock, and the commit goes on
+/// as it would have without one.
+pub struct CommitLock(Option<std::fs::File>);
+
+impl CommitLock {
+    #[must_use]
+    pub fn acquire(path: &std::path::Path) -> Self {
+        use std::os::unix::io::AsRawFd;
+        let Ok(file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        else {
+            return Self(None);
+        };
+        // SAFETY: flock on a descriptor this struct owns until drop.
+        let ok = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0;
+        Self(ok.then_some(file))
+    }
+}
+
+impl Drop for CommitLock {
+    fn drop(&mut self) {
+        use std::os::unix::io::AsRawFd;
+        if let Some(file) = &self.0 {
+            // SAFETY: the descriptor is still open; unlocking it cannot fail
+            // in a way that matters, since close releases it too.
+            unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
+        }
+    }
+}
+
 /// Commit the tracker file that holds `issue` and push it, when the tracker
 /// is a git checkout. A write that stays in one working tree is lost to
 /// every other host and to a rebuilt one; closures made on one laptop and
@@ -7950,8 +7983,29 @@ pub fn persist_tracker(issue: &str, verb: &str) -> String {
         Err(e) => return format!("tracker git: {e}\n"),
     }
     let message = format!("chore(issues): {issue} {verb}");
-    let committed = git(&["add", "--", &file])
+    // Every seat on the host commits this one checkout. The add and the
+    // commit run under one lock in the git directory, so ljos writers queue
+    // instead of meeting on index.lock; a git process outside ljos that
+    // holds the index is waited out a few times before the line says so.
+    let common = git(&["rev-parse", "--git-common-dir"])
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| dir.join(String::from_utf8_lossy(&o.stdout).trim()))
+        .unwrap_or_else(|| dir.join(".git"));
+    let _held = CommitLock::acquire(&common.join("ljos-commit.lock"));
+    let mut committed = git(&["add", "--", &file])
         .and_then(|_| git(&["commit", "-q", "--only", "-m", &message, "--", &file]));
+    for wait_ms in [200_u64, 400, 800, 1600, 3200] {
+        let busy = matches!(&committed, Ok(o) if !o.status.success()
+            && String::from_utf8_lossy(&o.stderr).contains("index.lock"));
+        if !busy {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(wait_ms));
+        committed = git(&["add", "--", &file])
+            .and_then(|_| git(&["commit", "-q", "--only", "-m", &message, "--", &file]));
+    }
+    drop(_held);
     match committed {
         Ok(o) if o.status.success() => {}
         Ok(o) => {
@@ -10279,6 +10333,27 @@ mod tests {
         assert!(
             subagent_stop_reason("explore", None, true, false).is_none(),
             "no issue, no gate"
+        );
+    }
+
+    #[test]
+    fn a_second_commit_lock_waits_for_the_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ljos-commit.lock");
+        let first = CommitLock::acquire(&path);
+        assert!(first.0.is_some(), "the lock opens");
+        let other = path.clone();
+        let started = std::time::Instant::now();
+        let waiter = std::thread::spawn(move || {
+            let _second = CommitLock::acquire(&other);
+            started.elapsed()
+        });
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        drop(first);
+        let waited = waiter.join().unwrap();
+        assert!(
+            waited >= std::time::Duration::from_millis(250),
+            "{waited:?}"
         );
     }
 
