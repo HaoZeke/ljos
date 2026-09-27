@@ -6016,6 +6016,10 @@ pub fn review_summary(atoms: &[Value], now: &str) -> String {
 /// grade from what it is about to read, rather than the oldest in the pack.
 #[must_use]
 pub fn due_on_island_first(due: Vec<Value>, island: &Value) -> Vec<Value> {
+    // A weak island is the pack's best-connected cluster, not the issue's.
+    if island["weak"].as_bool().unwrap_or(false) {
+        return due;
+    }
     let on: std::collections::BTreeSet<&str> = island["island"]
         .as_array()
         .into_iter()
@@ -11339,6 +11343,15 @@ mod tests {
             .map(|a| a["id"].as_str().unwrap().to_string())
             .collect();
         assert_eq!(ids, ["here", "old", "older"]);
+        let weak = serde_json::json!({"weak": true, "island": [{"id": "older"}]});
+        let kept = due_on_island_first(
+            vec![
+                serde_json::json!({"id": "a"}),
+                serde_json::json!({"id": "older"}),
+            ],
+            &weak,
+        );
+        assert_eq!(kept[0]["id"], "a", "a weak island does not reorder");
     }
 
     #[test]
