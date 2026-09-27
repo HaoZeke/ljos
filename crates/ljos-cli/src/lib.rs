@@ -3938,12 +3938,39 @@ pub fn personas_speaking_to(personas: &[Persona], words: &[String]) -> Vec<Perso
     }
     // No domain matched. Personas with no domains speak to every issue.
     // Specialists stay seated out: seating the whole pack is a count.
-    personas
+    let general: Vec<Persona> = personas
         .iter()
         .filter(|p| p.entities.is_empty())
         .cloned()
+        .collect();
+    if !general.is_empty() {
+        return general;
+    }
+    // A pack of specialists only: seat the few whose own view uses the
+    // issue's words most, so a decision still has voters with a view on it.
+    let mut ranked: Vec<(usize, &Persona)> = personas
+        .iter()
+        .map(|p| {
+            let view = p.view.to_lowercase();
+            let hits = words
+                .iter()
+                .filter(|w| w.chars().count() > 3 && view.contains(w.as_str()))
+                .count();
+            (hits, p)
+        })
+        .filter(|(hits, _)| *hits > 0)
+        .collect();
+    ranked.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.name.cmp(&b.1.name)));
+    ranked
+        .into_iter()
+        .take(PANEL_BY_VIEW)
+        .map(|(_, p)| p.clone())
         .collect()
 }
+
+/// How many specialists a panel seats by their views when no domain and no
+/// generalist speaks to the issue.
+pub const PANEL_BY_VIEW: usize = 5;
 
 /// The words an issue speaks in: its title's topic words, its tags, and
 /// the entities of the island its title activates when that island is not
@@ -3986,7 +4013,17 @@ pub fn panel(issue: &str, out: &Path) -> Result<String> {
     if all.is_empty() {
         bail!("panel: the pack holds no personas; `ljos persona NAME --anchor A --view ...` writes one");
     }
-    let personas = personas_speaking_to(&all, &issue_words(issue));
+    let words = issue_words(issue);
+    let personas = personas_speaking_to(&all, &words);
+    if personas.is_empty() {
+        bail!(
+            "panel: none of the {} personas speaks to {issue}: none holds its words ({}) as a \
+             domain or in its view. Tag the issue with a domain a persona holds, or write the \
+             briefs by hand with `ljos brief NAME {issue}`",
+            all.len(),
+            words.join(", ")
+        );
+    }
     std::fs::create_dir_all(out)?;
     let mut lines = vec![format!(
         "{} of {} personas speak to {issue}; briefs in {}; start one subagent per file, each ends with its ballot, then:",
@@ -10201,6 +10238,19 @@ mod tests {
         );
         let specialists = vec![mk("reviewer", &["docs"]), mk("cuda", &["gpu"])];
         assert!(personas_speaking_to(&specialists, &["fortran".to_string()]).is_empty());
+        let mut merger = mk("merger", &["git"]);
+        merger.view = "Reads a merge for the writer it silently drops.".into();
+        let mut other = mk("other", &["gpu"]);
+        other.view = "Wants the kernel to be fast.".into();
+        let by_view = personas_speaking_to(
+            &[merger, other],
+            &["merge".to_string(), "writers".to_string()],
+        );
+        assert_eq!(
+            by_view.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+            ["merger"],
+            "a specialist whose view uses the issue's words is seated"
+        );
     }
 
     #[test]

@@ -176,8 +176,10 @@ Every piece of work has an issue before it has a claim.
   A panel is refused until a playbook is bound (`ljos playbook ISSUE NAME`
   or `ljos sitting ISSUE --playbook NAME`). Both seat only the personas
   whose `--about` domains the issue's title or island names. A persona
-  with no domains sits only when no domain matches. Specialists stay
-  seated out: a panel that seats everyone is a count. Model names on a
+  with no domains sits only when no domain matches. When the pack holds
+  only specialists and none matches, the five whose views use the
+  issue's words most sit, and a panel with nobody to seat says so and
+  stops. A panel that seats everyone is a count. Model names on a
   playbook are optional spawn hints; every member still ends with
   `ljos vote --as` then `ljos consensus`. One playbook step per
   subagent; no resume across phases. Each brief is a file to start a
