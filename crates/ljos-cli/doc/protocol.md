@@ -70,6 +70,15 @@ tracker as a `playbook:` note until `finish` or `release`.
    `vissue claims` answers who holds it; a tracker that refuses the name
    refuses the sitting, and `ljos release` frees the claim graph.
 
+A decision is handed to the panel by the sitting. An issue tagged
+`decision`, typed `decision`, or with a body line opening `Options:`
+binds the `company-panel` recipe, and the sitting writes one brief per
+persona the issue speaks to under `== panel`. Start one subagent per
+brief; each ends with `ljos vote ISSUE --for OPTION --as NAME`, then
+`ljos consensus ISSUE`. `ljos finish ISSUE --close` refuses a decision
+with fewer than two ballots. Put any choice with more than one defensible
+answer on an issue this way before building it.
+
 No issue yet? `vissue q -p PROJECT "TITLE"` mints one and prints its id.
 Every piece of work has an issue before it has a claim.
 

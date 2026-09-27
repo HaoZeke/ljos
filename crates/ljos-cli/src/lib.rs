@@ -7035,6 +7035,20 @@ pub fn tracker_show_json(id: &str) -> Result<Value> {
     vissue_core::agent::show_json(&found.layout, id).map_err(anyhow::Error::from)
 }
 
+/// Whether an issue asks for a decision: a `decision` tag, a `decision`
+/// type, or a body line opening `Options:`.
+#[must_use]
+pub fn is_decision(v: &Value) -> bool {
+    let tagged = v["tags"]
+        .as_array()
+        .is_some_and(|t| t.iter().any(|x| x.as_str() == Some("decision")));
+    let typed = v["properties"]["TYPE"].as_str() == Some("decision");
+    let listed = v["body"]
+        .as_str()
+        .is_some_and(|b| b.lines().any(|l| l.trim_start().starts_with("Options:")));
+    tagged || typed || listed
+}
+
 /// The issue's title, for a cue, from the tracker.
 fn issue_title(issue: &str) -> Result<String> {
     let v = tracker_show_json(issue)?;
@@ -7397,9 +7411,27 @@ pub fn sitting_gated(
         }
         out.push_str("sitting anyway, as asked\n");
     }
-    let name = resolve_sitting_playbook(issue, &title, playbook)?;
+    // A decision is handed to the panel by the sitting itself: agents ran
+    // only the verbs the loop put in front of them, never an optional
+    // `ljos panel`, so the sitting binds the panel recipe and writes the
+    // briefs.
+    let decision = tracker_show_json(issue).is_ok_and(|v| is_decision(&v));
+    let name = match (playbook, decision) {
+        (None, true) if bound_playbook(issue).is_none() => "company-panel".to_string(),
+        _ => resolve_sitting_playbook(issue, &title, playbook)?,
+    };
     out.push_str("== playbook\n");
     out.push_str(&copy_playbook(issue, &name)?);
+    if decision {
+        out.push_str("== panel\n");
+        let dir = runtime_dir().join(format!("panel-{issue}"));
+        match panel(issue, &dir) {
+            Ok(said) => out.push_str(&format!(
+                "{issue} is a decision. Run the panel before the work: one subagent per brief, each casts its ballot, then `ljos consensus {issue}`. `ljos finish {issue} --close` refuses with fewer than two ballots.\n{said}"
+            )),
+            Err(e) => out.push_str(&format!("{issue} is a decision, and the panel could not be written: {e:#}\n")),
+        }
+    }
     out.push_str("== recall\n");
     out.push_str(&run_captured("vissue", &["recall", issue])?.stdout);
     // The last twelve dated events across the three stores; `ljos
@@ -7469,6 +7501,20 @@ pub fn finish(
     gen: Option<u64>,
     close: bool,
 ) -> Result<String> {
+    // A decision closes on ballots, not on the say of the seat that sat on
+    // it; refused before anything is written, so nothing half-happens.
+    if close && tracker_show_json(issue).is_ok_and(|v| is_decision(&v)) {
+        let said = run_captured("vissue", &["vote", issue, "--json"])?;
+        let ballots = forecasts_from_json(&said.stdout)?.len();
+        if ballots < 2 {
+            bail!(
+                "finish: {issue} is a decision and holds {ballots} ballot{}; run the panel \
+                 (`ljos panel {issue}`), have each persona cast `ljos vote {issue} --for OPTION --as NAME`, \
+                 settle with `ljos consensus {issue}`, then --close. Nothing was written",
+                if ballots == 1 { "" } else { "s" }
+            );
+        }
+    }
     let mut out = String::new();
     match lesson.map(str::trim).filter(|l| !l.is_empty()) {
         Some(text) => {
@@ -10858,6 +10904,22 @@ mod tests {
             "a matching generation is left alone"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_decision_is_a_tag_a_type_or_an_options_line() {
+        let v = |j: &str| -> Value { serde_json::from_str(j).unwrap() };
+        assert!(is_decision(&v(r#"{"tags":["seat","decision"]}"#)));
+        assert!(is_decision(&v(r#"{"properties":{"TYPE":"decision"}}"#)));
+        assert!(is_decision(&v(
+            r#"{"body":"Evidence.\n\nOptions:\n- a\n- b"}"#
+        )));
+        assert!(!is_decision(&v(
+            r#"{"tags":["bug"],"properties":{"TYPE":"task"},"body":"no options here"}"#
+        )));
+        assert!(!is_decision(&v(
+            r#"{"body":"We weighed the Options: none"}"#
+        )));
     }
 
     #[test]
