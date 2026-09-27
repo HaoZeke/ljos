@@ -94,6 +94,12 @@ pub struct Harness {
     /// Which bundled plugin goes there: a name in [`PLUGIN_TEMPLATES`].
     #[serde(default)]
     pub plugin_template: Option<String>,
+    /// A command that proves the runner loads the ljos tools, not only that
+    /// its config names them: it must exit 0 and print `ljos_sitting`. A
+    /// runner installed without its MCP support lists the entry and loads
+    /// nothing.
+    #[serde(default)]
+    pub probe: Vec<String>,
 }
 
 /// The plugins `ljos` carries for runners whose hooks are code, by name.
@@ -236,6 +242,8 @@ register = ["sh", "-c", "printf 'Y\\n' | hermes mcp add ljos --command {server}"
 config = "~/.hermes/config.yaml"
 marker = "\n  ljos:\n    command:"
 skills = "~/.hermes/skills"
+# A hermes installed without its MCP extra lists ljos and loads nothing.
+probe = ["hermes", "mcp", "test", "ljos"]
 
 [[harness]]
 name = "omp"
@@ -2188,17 +2196,23 @@ fn harness_rows() -> Vec<Habitat> {
     let mut rows = Vec::new();
     for h in &all.harness {
         let registered = is_registered(h, &server) == Some(true);
+        let probed = (registered && !h.probe.is_empty()).then(|| probe_lists_ljos(&h.probe));
         rows.push(Habitat {
             name: "runner mcp",
-            state: if registered {
-                format!("{}: ljos registered", h.name)
-            } else {
-                format!(
+            state: match (registered, &probed) {
+                (false, _) => format!(
                     "{}: not registered; ljos onboard --harness {}",
                     h.name, h.name
-                )
+                ),
+                (true, Some(Err(why))) => format!(
+                    "{}: registered, but `{}` does not list ljos_sitting: {why}",
+                    h.name,
+                    h.probe.join(" ")
+                ),
+                (true, Some(Ok(()))) => format!("{}: ljos registered and loads", h.name),
+                (true, None) => format!("{}: ljos registered", h.name),
             },
-            ok: registered,
+            ok: registered && !matches!(probed, Some(Err(_))),
         });
         let skill = h
             .skills
@@ -2267,6 +2281,49 @@ fn harness_rows() -> Vec<Habitat> {
         });
     }
     rows
+}
+
+/// Run a runner's probe with a thirty-second limit; it passes when it
+/// exits 0 and its output names `ljos_sitting`.
+fn probe_lists_ljos(argv: &[String]) -> std::result::Result<(), String> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    let (bin, args) = argv.split_first().ok_or("empty probe")?;
+    let mut child = Command::new(expand(bin))
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("{bin}: {e}"))?;
+    let started = std::time::Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() > std::time::Duration::from_secs(30) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("no answer in 30 s".into());
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(100)),
+            Err(e) => return Err(e.to_string()),
+        }
+    };
+    let mut out = String::new();
+    if let Some(mut o) = child.stdout.take() {
+        let _ = o.read_to_string(&mut out);
+    }
+    if let Some(mut e) = child.stderr.take() {
+        let _ = e.read_to_string(&mut out);
+    }
+    if !status.success() {
+        return Err(format!("exit {}", status.code().unwrap_or(-1)));
+    }
+    if out.contains("ljos_sitting") {
+        Ok(())
+    } else {
+        Err("its output names no ljos tool".into())
+    }
 }
 
 /// Have a pack writer up before anything else is wired: a runner onboarded
@@ -10801,6 +10858,18 @@ mod tests {
     }
 
     #[test]
+    fn a_probe_passes_only_when_the_runner_lists_ljos() {
+        let s = |v: &[&str]| v.iter().map(|x| (*x).to_string()).collect::<Vec<_>>();
+        assert!(probe_lists_ljos(&s(&["sh", "-c", "echo '  ljos_sitting   Call this'"])).is_ok());
+        assert!(probe_lists_ljos(&s(&["sh", "-c", "echo 'MCP SDK not installed'"])).is_err());
+        assert!(probe_lists_ljos(&s(&["sh", "-c", "echo ljos_sitting; exit 3"])).is_err());
+        assert!(probe_lists_ljos(&s(&["/nonexistent/runner"])).is_err());
+        let all: super::Harnesses = toml::from_str(super::HARNESSES_EXAMPLE).expect("parses");
+        let hermes = all.harness.iter().find(|h| h.name == "hermes").unwrap();
+        assert_eq!(hermes.probe, s(&["hermes", "mcp", "test", "ljos"]));
+    }
+
+    #[test]
     fn a_plugin_runner_gets_its_bundled_plugin_with_ljos_filled() {
         let all: super::Harnesses = toml::from_str(super::HARNESSES_EXAMPLE).expect("parses");
         for name in ["opencode", "omp"] {
@@ -11285,6 +11354,7 @@ mod tests {
             hook_events: Vec::new(),
             plugin: None,
             plugin_template: None,
+            probe: Vec::new(),
         };
         assert_eq!(is_registered(&h, Path::new("/bin/ljos-mcp")), Some(true));
         let _ = std::fs::remove_dir_all(&dir);
