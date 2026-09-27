@@ -876,7 +876,13 @@ impl LjosServer {
         Parameters(args): Parameters<DeedArgs>,
     ) -> Result<Json<Said>, McpError> {
         match &args.add {
-            Some(a) => habitat("vissue", &["deed", &args.issue, "--add", a]),
+            Some(a) => {
+                let mut said = habitat("vissue", &["deed", &args.issue, "--add", a])?;
+                said.0
+                    .text
+                    .push_str(&ljos_cli::persist_tracker(&args.issue, "cited a deed"));
+                Ok(said)
+            }
             None => habitat("vissue", &["deed", &args.issue]),
         }
     }
@@ -947,7 +953,11 @@ impl LjosServer {
                     argv.push(format!("{p}"));
                 }
                 let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
-                habitat_as("vissue", &refs, args.as_persona.as_deref())
+                let mut said = habitat_as("vissue", &refs, args.as_persona.as_deref())?;
+                said.0
+                    .text
+                    .push_str(&ljos_cli::persist_tracker(&args.issue, "ballot cast"));
+                Ok(said)
             }
             None => habitat("vissue", &["vote", &args.issue]),
         }
@@ -1067,8 +1077,9 @@ impl LjosServer {
         &self,
         Parameters(args): Parameters<TakeArgs>,
     ) -> Result<Json<Said>, McpError> {
-        let text =
+        let mut text =
             release(&args.node, &resolve_assignee(args.assignee.as_deref())).map_err(refused)?;
+        text.push_str(&ljos_cli::persist_tracker(&args.node, "released"));
         Ok(Json(Said { text, aside: None }))
     }
 
@@ -1554,7 +1565,8 @@ impl LjosServer {
         &self,
         Parameters(args): Parameters<PlaybookBindArgs>,
     ) -> Result<Json<Said>, McpError> {
-        let text = copy_playbook(&args.issue, &args.name).map_err(refused)?;
+        let mut text = copy_playbook(&args.issue, &args.name).map_err(refused)?;
+        text.push_str(&ljos_cli::persist_tracker(&args.issue, "bound a playbook"));
         Ok(Json(Said { text, aside: None }))
     }
 

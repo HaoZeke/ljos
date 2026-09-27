@@ -506,7 +506,10 @@ fn main() -> Result<()> {
         Cmd::Evidence { accession } => run("deedar", &["evidence", &accession])?,
         Cmd::Current { accession } => run("deedar", &["current", &accession])?,
         Cmd::Deed { issue, add } => match add {
-            Some(a) => run("vissue", &["deed", &issue, "--add", &a])?,
+            Some(a) => {
+                run("vissue", &["deed", &issue, "--add", &a])?;
+                print!("{}", ljos_cli::persist_tracker(&issue, "cited a deed"));
+            }
             None => run("vissue", &["deed", &issue])?,
         },
         Cmd::Recall { issue } => run("vissue", &["recall", &issue])?,
@@ -538,6 +541,7 @@ fn main() -> Result<()> {
                 }
                 let refs: Vec<&str> = args.iter().map(String::as_str).collect();
                 run_as("vissue", &refs, as_persona.as_deref())?;
+                print!("{}", ljos_cli::persist_tracker(&args[1], "ballot cast"));
             }
             None => run("vissue", &["vote", &issue])?,
         },
@@ -561,7 +565,10 @@ fn main() -> Result<()> {
         Cmd::Personas => {
             print!("{}", format_personas(&personas_from_pack()?));
         }
-        Cmd::Playbook { issue, name } => print!("{}", copy_playbook(&issue, &name)?),
+        Cmd::Playbook { issue, name } => {
+            print!("{}", copy_playbook(&issue, &name)?);
+            print!("{}", ljos_cli::persist_tracker(&issue, "bound a playbook"));
+        }
         Cmd::Playbooks => {
             print!("{}", format_playbooks(&playbooks_from_pack()?));
         }
@@ -572,7 +579,8 @@ fn main() -> Result<()> {
             print!(
                 "{}",
                 release(&node, &resolve_assignee(assignee.as_deref()))?
-            )
+            );
+            print!("{}", ljos_cli::persist_tracker(&node, "released"));
         }
         Cmd::Complete {
             node,

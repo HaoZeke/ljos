@@ -8648,6 +8648,7 @@ pub fn remember_findings(state: &Path, issue: Option<&str>, all: bool) -> Result
             .filter(|a| a.len() > "deed-".len())
             .context("findings: deedar create printed no accession")?;
         run_captured("vissue", &["deed", issue, "--add", &accession])?;
+        let _ = persist_tracker(issue, "cited the campaign state");
         out.push(Remembered {
             id: "state".into(),
             lesson: name,
@@ -8874,6 +8875,10 @@ pub fn bump_plan(
             run_captured("vissue", &["update", &row.id, "--block", dep])
                 .with_context(|| format!("bump-plan: {} --block {dep}", row.id))?;
         }
+    }
+    // Every module lands in one project file; one persist carries them all.
+    if let Some(first) = rows.first() {
+        let _ = persist_tracker(&first.id, "planned the bump");
     }
     Ok((generation, rows))
 }
