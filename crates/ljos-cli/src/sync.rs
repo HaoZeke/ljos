@@ -16,7 +16,7 @@
 //! sends retires the local copy that came from it, never a claim this
 //! machine wrote itself.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -30,6 +30,22 @@ pub struct Scope {
     pub name: String,
     /// The age public keys of the machines allowed to read this scope.
     pub recipients: Vec<String>,
+    /// Projects of this repository whose lessons belong to another scope:
+    /// `[projects] tools = "shared"` sends a lesson written on a `tools`
+    /// issue with the `shared` scope's log instead of this one.
+    #[serde(default)]
+    pub projects: BTreeMap<String, String>,
+}
+
+impl Scope {
+    /// The scope a lesson on an issue of `project` belongs to.
+    #[must_use]
+    pub fn for_project(&self, project: &str) -> String {
+        self.projects
+            .get(project)
+            .cloned()
+            .unwrap_or_else(|| self.name.clone())
+    }
 }
 
 /// This machine's defaults: `~/.config/ljos/sync.toml`, `default_scope`.
@@ -462,7 +478,10 @@ pub fn scope_for_issue(issue: &str) -> Option<String> {
         .ancestors()
         .find(|d| d.join(".git").exists())?
         .to_path_buf();
-    scope_of_repo(&root).ok().flatten().map(|s| s.name)
+    scope_of_repo(&root)
+        .ok()
+        .flatten()
+        .map(|s| s.for_project(&hit.project))
 }
 
 /// The tracker repository this seat writes, its root directory.
@@ -644,6 +663,18 @@ mod tests {
         assert_eq!(lines[1]["id"], "b");
         assert!(lines.iter().all(|a| a.get("embedding").is_none()));
         assert_eq!(log_plaintext(&atoms, "personal", "surf").lines().count(), 1);
+    }
+
+    #[test]
+    fn a_project_named_in_the_scope_file_takes_its_own_scope() {
+        let scope: Scope = toml::from_str(
+            "name = \"personal\"\nrecipients = [\"age1x\"]\n[projects]\ntools = \"shared\"\n",
+        )
+        .unwrap();
+        assert_eq!(scope.for_project("tools"), "shared");
+        assert_eq!(scope.for_project("garden"), "personal");
+        let bare: Scope = toml::from_str("name = \"shared\"\nrecipients = []\n").unwrap();
+        assert!(bare.projects.is_empty());
     }
 
     #[test]
