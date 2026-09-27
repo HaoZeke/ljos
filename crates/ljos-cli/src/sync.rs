@@ -523,6 +523,41 @@ fn commit_log(root: &Path, scope: &str) -> String {
     )
 }
 
+/// Fetch every remote and fast-forward to each one that is ahead. Machines
+/// that push to different remotes of one tracker then read each other's
+/// logs whenever the history is linear; a real divergence stays for the
+/// doctor's split row and a person.
+fn catch_up(root: &Path) -> String {
+    if git(root, &["fetch", "-q", "--all"]).map_or(true, |o| !o.status.success()) {
+        return "sync: fetch failed; reading the logs as they are\n".into();
+    }
+    let Some(up) = crate::tracker_upstream(root) else {
+        return String::new();
+    };
+    let mut refs = vec![up.clone()];
+    refs.extend(
+        crate::tracker_mirrors(root, &up)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(r, b)| format!("{r}/{b}")),
+    );
+    let mut stuck = Vec::new();
+    for r in refs {
+        let merged = git(root, &["merge", "-q", "--ff-only", &r]);
+        if !merged.is_ok_and(|o| o.status.success()) {
+            stuck.push(r);
+        }
+    }
+    if stuck.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "sync: could not fast-forward to {}; `ljos doctor` names the split\n",
+            stuck.join(", ")
+        )
+    }
+}
+
 /// One pass over the tracker repository's scope: pull, take every other
 /// machine's log, write and push this machine's. `pull_import` and `export`
 /// pick the halves; the sitting takes the first, finish the second.
@@ -555,17 +590,7 @@ fn sync_one(root: &Path, pull_import: bool, export_log: bool) -> Result<String> 
     };
     let mut out = String::new();
     if pull_import {
-        match git(&root, &["pull", "-q", "--ff-only"]) {
-            Ok(o) if o.status.success() => {}
-            Ok(o) => out.push_str(&format!(
-                "sync: pull did not fast-forward: {}\n",
-                String::from_utf8_lossy(&o.stderr)
-                    .lines()
-                    .next()
-                    .unwrap_or("")
-            )),
-            Err(e) => out.push_str(&format!("sync: git pull: {e}\n")),
-        }
+        out.push_str(&catch_up(&root));
         out.push_str(&import(&root, &scope)?);
     }
     if export_log {
