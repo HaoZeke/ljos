@@ -553,7 +553,20 @@ fn commit_log(root: &Path, scope: &str) -> String {
     let message = format!("chore(sync): {host} {scope} atoms");
     let mut commit = vec!["commit", "-q", "--only", "-m", message.as_str(), "--"];
     commit.extend(files.iter().map(String::as_str));
-    match git(root, &commit) {
+    // The tracker file commit waits out another git process on index.lock.
+    // The atom log is the same checkout, so it takes the same waits.
+    let mut committed = git(root, &commit);
+    for wait_ms in [200_u64, 400, 800, 1600, 3200] {
+        let busy = matches!(&committed, Ok(o) if !o.status.success()
+            && String::from_utf8_lossy(&o.stderr).contains("index.lock"));
+        if !busy {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(wait_ms));
+        let _ = git(root, &add);
+        committed = git(root, &commit);
+    }
+    match committed {
         Ok(o) if o.status.success() => {}
         Ok(o) => {
             return format!(
