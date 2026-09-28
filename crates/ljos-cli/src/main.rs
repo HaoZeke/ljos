@@ -7,14 +7,15 @@ use ljos_cli::{
     copy_playbook, doctor, due_report, finish, forecasts_from_json, format_bump_rows,
     format_consolidation, format_doctor, format_findings, format_hits, format_hubs, format_island,
     format_personas, format_playbooks, format_readings, format_remembered, format_seat,
-    format_steps, format_write_ack, graded, habit, habits, handover, healthy, hold_hook_context,
-    hook_call, hook_context, hook_output_ruled, island_entities, join, learn_anchors,
+    format_steps, format_write_ack, graded, habit, habits, handover, healthy, hook_call, hook_note,
+    hook_output_ruled, island_entities, join, learn_anchors, mark_seen, post_hook_stdout,
     learn_and_write, learn_reading, learn_shared, now_utc, on_path, onboard, pack,
     packset_consolidate, packset_forget, packset_hubs, packset_island_as, packset_search_as_of,
     packset_write_as, panel, panel_steps, parse_every, personas_from_pack, playbooks_from_pack,
-    policy_with_memory, policyd_required, predictions_of, read_campaign, receive, release,
+    policy_with_memory, policyd_required, predictions_of, prompt_hook_stdout, read_campaign,
+    receive, release,
     remember_findings, resolve_assignee, rows_about, rules_from_pack, run, run_as, run_captured,
-    session_end, sitting_gated, take_hook_context, tcb_check, timeline, topic_words,
+    session_end, sitting_gated, stop_hook_stdout, tcb_check, timeline, topic_words,
     tracker_show_json, trim_num, trust_from_pack, verdict_for, whoami, write_persona,
     write_prediction, write_rule, write_trust, Persona, Reading, Rule, Trust, HARNESSES_EXAMPLE,
     LEARN_BETA, POLICY_TCB, PROTOCOL,
@@ -724,13 +725,13 @@ fn main() -> Result<()> {
                     None
                 };
             let verdict = tcb_rule.as_ref().or_else(|| verdict_for(&rules, &call.cue));
-            // Search on the prompt. Grok throws UserPromptSubmit stdout
-            // away, so hold the text and emit it once on PostToolUse, the
-            // event it actually delivers. PreToolUse / argv only decide.
+            // Search on the prompt. A camel-case runner discards that
+            // stdout, so the note is held and emitted on Stop, the event
+            // whose feedback reaches the model. PreToolUse / argv only decide.
             let context = match call.event.as_str() {
                 "PreToolUse" | "argv" => String::new(),
                 "PostToolUse" => {
-                    let mut ctx = take_hook_context(call.session.as_deref());
+                    let mut ctx = post_hook_stdout(call.shape, call.session.as_deref());
                     if let Some(kind) = subagent.as_deref() {
                         let key = format!("subagent-brief:{agent}");
                         if !ljos_cli::seen_ids(call.session.as_deref()).contains(&key) {
@@ -749,13 +750,22 @@ fn main() -> Result<()> {
                     }
                     ctx
                 }
+                // Stop is the event whose feedback reaches a runner that
+                // discards prompt-hook stdout. The ids are marked only here.
+                "Stop" => {
+                    let (ctx, ids) = stop_hook_stdout(call.session.as_deref(), stop_active);
+                    mark_seen(call.session.as_deref(), &ids);
+                    ctx
+                }
                 // A turn ending is not a session ending, and has nothing
                 // to say either.
                 "SessionStart" | "TurnEnd" => String::new(),
                 _ => {
-                    let ctx = hook_context(&call, limit);
-                    hold_hook_context(call.session.as_deref(), &ctx);
-                    ctx
+                    let (ctx, ids) = hook_note(&call, limit);
+                    if call.shape != ljos_cli::HookShape::CamelCase {
+                        mark_seen(call.session.as_deref(), &ids);
+                    }
+                    prompt_hook_stdout(call.shape, call.session.as_deref(), &ctx, &ids)
                 }
             };
             print!("{}", hook_output_ruled(&call, &context, verdict));

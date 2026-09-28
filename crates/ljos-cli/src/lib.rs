@@ -1541,6 +1541,7 @@ pub const HOOK_MATCHERS: &[(&str, &str)] = &[
     ("PreToolUse", "Bash"),
     ("PostToolUse", "*"),
     ("UserPromptSubmit", "*"),
+    ("Stop", "*"),
     ("SessionEnd", "*"),
     ("SubagentStop", "*"),
 ];
@@ -1562,6 +1563,7 @@ fn normalize_hook_event(raw: &str) -> &str {
         "session_end" | "SessionEnd" => "SessionEnd",
         "session_start" | "SessionStart" => "SessionStart",
         "subagent_stop" | "SubagentStop" | "SubagentEnd" | "subagentStop" => "SubagentStop",
+        "stop" | "Stop" => "Stop",
         other => other,
     }
 }
@@ -1580,6 +1582,7 @@ fn hook_events_of(h: &Harness) -> Vec<String> {
             "UserPromptSubmit",
             "PostToolUse",
             "PreToolUse",
+            "Stop",
             "SessionEnd",
             "SubagentStop",
         ]
@@ -1935,9 +1938,8 @@ pub fn session_end(session: Option<&str>) -> usize {
     fired
 }
 
-/// Where a Grok prompt's pack context waits for `PostToolUse`.
-/// Grok discards `UserPromptSubmit` stdout; it delivers
-/// `PostToolUse` `additionalContext` after the first tool.
+/// Where a prompt's pack note waits. One runner discards prompt-hook
+/// stdout and reads `Stop` feedback, so the note stays here until then.
 fn hook_hold_path(session: Option<&str>) -> Option<PathBuf> {
     let dir = std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
@@ -1956,27 +1958,118 @@ fn hook_hold_path(session: Option<&str>) -> Option<PathBuf> {
     Some(dir.join(format!("ljos-hook-hold-{name}")))
 }
 
-/// Remember the prompt's pack text so the next `PostToolUse` can emit it.
+fn hook_hold_ids_path(session: Option<&str>) -> Option<PathBuf> {
+    hook_hold_path(session).map(|p| {
+        let mut os = p.into_os_string();
+        os.push(".ids");
+        PathBuf::from(os)
+    })
+}
+
+/// Remember the prompt's pack text and the memory ids it names.
+/// An empty note leaves a note already held: a later prompt that matches
+/// nothing must not erase one the runner has not delivered yet.
 pub fn hold_hook_context(session: Option<&str>, context: &str) {
+    hold_hook_note(session, context, &[]);
+}
+
+/// Hold `context` with the ids to mark seen when a runner delivers it.
+pub fn hold_hook_note(session: Option<&str>, context: &str, ids: &[String]) {
     let Some(path) = hook_hold_path(session) else {
         return;
     };
     if context.is_empty() {
-        let _ = std::fs::remove_file(&path);
         return;
     }
-    let _ = std::fs::write(path, context);
+    let _ = std::fs::write(&path, context);
+    if let Some(ids_path) = hook_hold_ids_path(session) {
+        let _ = std::fs::write(ids_path, ids.join("\n"));
+    }
+}
+
+/// The held pack text, left in place.
+#[must_use]
+pub fn peek_hook_context(session: Option<&str>) -> String {
+    hook_hold_path(session)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .unwrap_or_default()
 }
 
 /// Take the held pack text once. Empty if nothing was held.
 #[must_use]
 pub fn take_hook_context(session: Option<&str>) -> String {
+    take_hook_note(session).0
+}
+
+/// Take the held note and its ids, and remove both files.
+#[must_use]
+pub fn take_hook_note(session: Option<&str>) -> (String, Vec<String>) {
     let Some(path) = hook_hold_path(session) else {
-        return String::new();
+        return (String::new(), Vec::new());
     };
     let text = std::fs::read_to_string(&path).unwrap_or_default();
     let _ = std::fs::remove_file(&path);
-    text
+    let ids = hook_hold_ids_path(session)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|t| {
+            let _ = hook_hold_ids_path(session).map(|p| std::fs::remove_file(p));
+            t.lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    (text, ids)
+}
+
+/// Stdout for a prompt hook. A camel-case runner discards that stdout, so
+/// the note is held and the stdout is empty. Any other runner is handed
+/// the note directly.
+#[must_use]
+pub fn prompt_hook_stdout(
+    shape: HookShape,
+    session: Option<&str>,
+    text: &str,
+    ids: &[String],
+) -> String {
+    if shape == HookShape::CamelCase {
+        hold_hook_note(session, text, ids);
+        String::new()
+    } else {
+        hold_hook_context(session, text);
+        text.to_string()
+    }
+}
+
+/// Stdout for a tool-result hook. A camel-case runner echoes the held note
+/// once and leaves it for `Stop`. Any other runner takes it.
+#[must_use]
+pub fn post_hook_stdout(shape: HookShape, session: Option<&str>) -> String {
+    if shape == HookShape::CamelCase {
+        let key = "hold-echoed".to_string();
+        if seen_ids(session).contains(&key) {
+            return String::new();
+        }
+        let text = peek_hook_context(session);
+        if !text.is_empty() {
+            mark_seen(session, &[key]);
+        }
+        text
+    } else {
+        take_hook_context(session)
+    }
+}
+
+/// Stdout for `Stop`, and the ids to mark now that the note is delivered.
+/// A continuation (`stop_active`) says nothing: the first `Stop` already
+/// delivered the note.
+#[must_use]
+pub fn stop_hook_stdout(session: Option<&str>, stop_active: bool) -> (String, Vec<String>) {
+    if stop_active {
+        return (String::new(), Vec::new());
+    }
+    take_hook_note(session)
 }
 
 pub fn mark_seen(session: Option<&str>, ids: &[String]) {
@@ -1999,15 +2092,15 @@ pub fn mark_seen(session: Option<&str>, ids: &[String]) {
 /// that match it as well as the best does are worth the agent's context.
 pub const HOOK_SCORE_FLOOR: f64 = 0.6;
 
-/// The context the hook injects: the island the cue activates, standing
-/// preferences first because they bear on what to do, then lessons. Empty
-/// when the pack holds nothing on it or does not answer; a hook that fails
-/// must not stop the runner, so this never errors.
+/// The pack note for a prompt, and the memory ids named in it.
+/// The ids are not marked seen here: the caller marks them when the runner
+/// delivers the note. A camel-case prompt hook's stdout is discarded, so
+/// marking here would burn the note before the model read it.
 #[must_use]
-pub fn hook_context(call: &HookCall, limit: usize) -> String {
+pub fn hook_note(call: &HookCall, limit: usize) -> (String, Vec<String>) {
     let cue = call.cue.trim();
     if cue.len() < 3 {
-        return String::new();
+        return (String::new(), Vec::new());
     }
     // The nudges answer what the prompt says, not what the pack holds, so
     // a prompt the pack knows nothing about still gets them.
@@ -2022,11 +2115,11 @@ pub fn hook_context(call: &HookCall, limit: usize) -> String {
         nudge.push_str(&extra);
     }
     let Ok(hits) = packset_search(cue) else {
-        return nudge;
+        return (nudge, Vec::new());
     };
     let top = hits.iter().map(|h| h.score).fold(0.0_f64, f64::max);
     if top <= 0.0 {
-        return nudge;
+        return (nudge, Vec::new());
     }
     let seen = seen_ids(call.session.as_deref());
     let mut rows: Vec<&Hit> = hits
@@ -2054,13 +2147,10 @@ pub fn hook_context(call: &HookCall, limit: usize) -> String {
     let split = rows.iter().filter(|h| h.kind == "preference").count();
     rows[split..].sort_by_key(|h| days_of_stamp(h.ts.as_deref()).unwrap_or(i64::MAX));
     let lines: Vec<String> = rows.iter().map(|h| hit_line(h, &now)).collect();
+    let ids: Vec<String> = rows.iter().filter_map(|h| h.id.clone()).collect();
     if lines.is_empty() {
-        return nudge;
+        return (nudge, Vec::new());
     }
-    mark_seen(
-        call.session.as_deref(),
-        &rows.iter().filter_map(|h| h.id.clone()).collect::<Vec<_>>(),
-    );
     let mut out = format!(
         "What this seat already knows that bears on this (from the pack, each with its age, lessons oldest first; `ljos search` for more):\n{}",
         lines.join("\n")
@@ -2069,7 +2159,19 @@ pub fn hook_context(call: &HookCall, limit: usize) -> String {
         out.push('\n');
         out.push_str(&nudge);
     }
-    out
+    (out, ids)
+}
+
+/// The context the hook injects. A camel-case runner does not see prompt
+/// stdout, so the ids stay unmarked until [`stop_hook_stdout`] delivers
+/// them. Every other runner is shown this string and the ids are marked now.
+#[must_use]
+pub fn hook_context(call: &HookCall, limit: usize) -> String {
+    let (text, ids) = hook_note(call, limit);
+    if call.shape != HookShape::CamelCase {
+        mark_seen(call.session.as_deref(), &ids);
+    }
+    text
 }
 
 /// Whether the pack's scorers agreed on a hit: named by at least two of
@@ -2557,6 +2659,26 @@ fn harness_rows() -> Vec<Habitat> {
                 },
                 ok: installed,
             });
+        } else if h.plugin.is_none() {
+            if let Some(cfg) = &h.config {
+                let path = expand(cfg);
+                let installed = std::fs::read_to_string(&path)
+                    .is_ok_and(|t| t.contains("ljos hook"));
+                rows.push(Habitat {
+                    name: "runner hook",
+                    state: if installed {
+                        format!("{}: memory hook in {}", h.name, path.display())
+                    } else {
+                        format!(
+                            "{}: no memory hook in {}; ljos onboard --harness {}",
+                            h.name,
+                            path.display(),
+                            h.name
+                        )
+                    },
+                    ok: installed,
+                });
+            }
         }
         if let Some(dest) = &h.plugin {
             let path = expand(dest);
@@ -10984,6 +11106,26 @@ mod tests {
         hold_hook_context(Some("s1"), "held pack");
         assert_eq!(take_hook_context(Some("s1")), "held pack");
         assert!(take_hook_context(Some("s1")).is_empty());
+        let session = format!("hold-{}", std::process::id());
+        hold_hook_note(Some(&session), "pack line", &["m1".to_string()]);
+        hold_hook_context(Some(&session), "");
+        assert_eq!(peek_hook_context(Some(&session)), "pack line");
+        assert_eq!(
+            prompt_hook_stdout(
+                HookShape::CamelCase,
+                Some(&session),
+                "pack line",
+                &["m1".to_string()]
+            ),
+            ""
+        );
+        assert_eq!(post_hook_stdout(HookShape::CamelCase, Some(&session)), "pack line");
+        assert_eq!(post_hook_stdout(HookShape::CamelCase, Some(&session)), "");
+        let (delivered, ids) = stop_hook_stdout(Some(&session), false);
+        assert_eq!(delivered, "pack line");
+        assert_eq!(ids, ["m1"]);
+        assert!(stop_hook_stdout(Some(&session), false).0.is_empty());
+        assert!(stop_hook_stdout(Some(&session), true).0.is_empty());
         let argv = hook_call("rm -rf build");
         assert_eq!(argv.event, "argv");
         assert_eq!(argv.session, None);
@@ -11859,6 +12001,8 @@ mod tests {
         let pre = &v["hooks"]["PreToolUse"][0]["hooks"][0];
         assert_eq!(pre["command"], "/opt/seat/bin/ljos hook");
         assert_eq!(pre["timeout"], 10);
+        let stop = &v["hooks"]["Stop"][0]["hooks"][0];
+        assert_eq!(stop["command"], "/opt/seat/bin/ljos hook");
         assert!(!text.contains("{ljos}"), "{text}");
         assert!(!text.contains("\"ljos hook\""), "{text}");
     }

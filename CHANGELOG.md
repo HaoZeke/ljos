@@ -4,6 +4,10 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
+- A runner that discards prompt-hook stdout still receives the pack note.
+  The note is held until `Stop`, an empty later prompt does not erase it,
+  and the memory ids are marked seen only once that note is emitted.
+
 - `ljos sync` shares the seat's memory across machines through the tracker
   repository. Each repository names a scope and its age recipients in
   `.ljos/sync.toml`, and each machine writes one sealed log under
