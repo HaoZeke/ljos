@@ -656,6 +656,10 @@ fn main() -> Result<()> {
             let mut input = String::new();
             std::io::stdin().read_to_string(&mut input)?;
             let call = hook_call(&input);
+            // A hook answers within the runner's timeout: lookups that walk
+            // the whole tracker are skipped from here on.
+            // SAFETY: single-threaded here, before anything reads the environment.
+            unsafe { std::env::set_var("LJOS_IN_HOOK", "1") };
             let (subagent, stop_active, agent) = ljos_cli::hook_subagent(&input);
             ljos_cli::hook_trace(&input, &call, subagent.as_deref());
             // A subagent about to stop is held once while its parent holds

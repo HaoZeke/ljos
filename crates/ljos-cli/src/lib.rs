@@ -2185,6 +2185,14 @@ pub fn held_issue() -> Option<String> {
     if !holders.contains(&own) {
         holders.push(own);
     }
+    // The hold records answer in milliseconds; the tracker walk below takes
+    // seconds on a large tracker, past what a runner lets a hook run.
+    if let Some(node) = held_from_records(&holders) {
+        return Some(node);
+    }
+    if std::env::var_os("LJOS_IN_HOOK").is_some() {
+        return None;
+    }
     holders.iter().find_map(|holder| {
         let out = run_captured("vissue", &["claims", "--by", holder, "--json"]).ok()?;
         let rows: Value = serde_json::from_str(&out.stdout).ok()?;
@@ -7287,7 +7295,7 @@ pub fn claim(node: &str, assignee: &str) -> Result<String> {
     let actor = work_id(&occupancy_scope(assignee, node));
     match run_captured("claimdag", &["claim", &id, "--assignee", &actor]) {
         Ok(said) => {
-            write_hold(&actor, assignee);
+            write_hold(&actor, assignee, node);
             with_tracker(said.stdout, node, assignee)
         }
         Err(e) => {
@@ -7300,7 +7308,7 @@ pub fn claim(node: &str, assignee: &str) -> Result<String> {
             {
                 run_captured("claimdag", &["reopen", &id, "--actor", &actor])?;
                 let said = run_captured("claimdag", &["claim", &id, "--assignee", &actor])?;
-                write_hold(&actor, assignee);
+                write_hold(&actor, assignee, node);
                 return with_tracker(
                     format!("reopened a finished session node\n{}", said.stdout),
                     node,
@@ -7316,7 +7324,7 @@ pub fn claim(node: &str, assignee: &str) -> Result<String> {
                         let renewed = run_captured("claimdag", &["renew", &id, "--actor", &actor])
                             .map(|s| s.stdout)
                             .unwrap_or_default();
-                        write_hold(&actor, assignee);
+                        write_hold(&actor, assignee, node);
                         with_tracker(
                             format!("already held by {assignee}; the sitting resumes\n{renewed}"),
                             node,
@@ -7333,7 +7341,7 @@ pub fn claim(node: &str, assignee: &str) -> Result<String> {
                             drop_hold(&holder);
                             let said =
                                 run_captured("claimdag", &["claim", &id, "--assignee", &actor])?;
-                            write_hold(&actor, assignee);
+                            write_hold(&actor, assignee, node);
                             with_tracker(
                                 format!(
                                     "took over from {}, this seat's conversation, gone (held since {})\n{}",
@@ -7443,20 +7451,49 @@ fn conversation_process() -> (u32, String) {
         .unwrap_or((std::process::id(), String::new()))
 }
 
-fn write_hold(actor: &str, assignee: &str) {
+fn write_hold(actor: &str, assignee: &str, node: &str) {
     let (pid, comm) = conversation_process();
     let path = hold_record_path(actor);
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
+    // The issue is the sixth line: a subagent reads what its parent holds
+    // from here, since asking the tracker takes longer than a hook may run.
     let _ = std::fs::write(
         path,
         format!(
-            "{assignee}\n{}\n{pid}\n{comm}\n{}\n",
+            "{assignee}\n{}\n{pid}\n{comm}\n{}\n{node}\n",
             seat_name(),
             now_utc()
         ),
     );
+}
+
+/// The issue the newest hold record of this conversation names: a record
+/// whose holder is one of `holders`, or whose conversation process is an
+/// ancestor of this one. File reads only, so a hook can afford it.
+fn held_from_records(holders: &[String]) -> Option<String> {
+    let pids: Vec<String> = ancestry().iter().map(|(p, _)| p.to_string()).collect();
+    let mut best: Option<(String, String)> = None;
+    for entry in std::fs::read_dir(runtime_dir()).ok()?.flatten() {
+        if !entry.file_name().to_string_lossy().starts_with("hold-") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        let lines: Vec<&str> = text.lines().map(str::trim).collect();
+        let (Some(holder), Some(pid), Some(at), Some(node)) =
+            (lines.first(), lines.get(2), lines.get(4), lines.get(5))
+        else {
+            continue;
+        };
+        let ours = holders.iter().any(|h| h == holder) || pids.iter().any(|p| p == pid);
+        if ours && !node.is_empty() && best.as_ref().is_none_or(|(t, _)| *at > t.as_str()) {
+            best = Some(((*at).to_string(), (*node).to_string()));
+        }
+    }
+    best.map(|(_, node)| node)
 }
 
 fn drop_hold(actor: &str) {
@@ -10556,6 +10593,36 @@ mod tests {
             "vissue merge-driver %O %A %B %P",
         ]);
         assert!(tracker_merge_driver_missing(dir.path()).is_none());
+    }
+
+    #[test]
+    fn a_subagent_reads_its_parents_issue_from_the_hold_records() {
+        let _g = env_guard();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", dir.path()) };
+        let ljos = dir.path().join("ljos");
+        std::fs::create_dir_all(&ljos).unwrap();
+        let rec = |name: &str, holder: &str, at: &str, node: &str| {
+            std::fs::write(
+                ljos.join(format!("hold-{name}")),
+                format!("{holder}\nacme\n1\nacme\n{at}\n{node}\n"),
+            )
+            .unwrap();
+        };
+        rec("a", "sess-parent", "2026-09-27T10:00:00Z", "acme-old1");
+        rec("b", "sess-parent", "2026-09-27T12:00:00Z", "acme-new2");
+        rec("c", "sess-other", "2026-09-27T13:00:00Z", "brio-3c4d");
+        std::fs::write(
+            ljos.join("hold-d"),
+            "sess-parent\nacme\n1\nacme\n2026-09-27T14:00:00Z\n",
+        )
+        .unwrap();
+        assert_eq!(
+            held_from_records(&["sess-parent".to_string()]).as_deref(),
+            Some("acme-new2")
+        );
+        assert_eq!(held_from_records(&["sess-nobody".to_string()]), None);
+        unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
     }
 
     #[test]
