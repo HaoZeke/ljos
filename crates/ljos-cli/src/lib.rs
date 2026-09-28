@@ -2194,7 +2194,9 @@ fn names_a_numbered_pr(text: &str) -> bool {
     let b = t.as_bytes();
     let mut i = 0;
     while i < b.len() {
-        if (i == 0 || !b[i - 1].is_ascii_alphanumeric()) && pr_number_at(&t[i..]) {
+        if (i == 0 || !b[i - 1].is_ascii_alphanumeric())
+            && (pr_number_at(&t[i..]) || hash_number_at(&t[i..]))
+        {
             return true;
         }
         i += 1;
@@ -2223,6 +2225,14 @@ fn pr_number_at(rest: &str) -> bool {
     };
     let after = after.trim_start();
     let after = after.strip_prefix('#').unwrap_or(after).trim_start();
+    after.starts_with(|c: char| c.is_ascii_digit())
+}
+
+/// `#80` names one pull request even when the word PR is not in front of it.
+fn hash_number_at(rest: &str) -> bool {
+    let Some(after) = rest.strip_prefix('#') else {
+        return false;
+    };
     after.starts_with(|c: char| c.is_ascii_digit())
 }
 
