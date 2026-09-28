@@ -2093,7 +2093,99 @@ pub fn mark_seen(session: Option<&str>, ids: &[String]) {
 /// The floor a hit must reach, as a share of the strongest hit's score, to
 /// be injected. A command line matches many claims weakly; only the ones
 /// that match it as well as the best does are worth the agent's context.
+/// The floor is not relevance: a vague sentence scores high on unrelated
+/// lessons, so a hit must also name a content word of the cue.
 pub const HOOK_SCORE_FLOOR: f64 = 0.6;
+
+/// Words that sit in almost every sentence and almost every lesson.
+/// A cue word on this list does not make a lesson about the prompt.
+const CUE_STOP: &[&str] = &[
+    "about",
+    "after",
+    "also",
+    "anything",
+    "because",
+    "been",
+    "before",
+    "being",
+    "both",
+    "could",
+    "does",
+    "doing",
+    "each",
+    "everything",
+    "from",
+    "have",
+    "having",
+    "into",
+    "just",
+    "like",
+    "making",
+    "more",
+    "most",
+    "need",
+    "nothing",
+    "only",
+    "other",
+    "over",
+    "please",
+    "really",
+    "same",
+    "should",
+    "some",
+    "something",
+    "still",
+    "such",
+    "than",
+    "that",
+    "their",
+    "them",
+    "then",
+    "there",
+    "these",
+    "they",
+    "this",
+    "those",
+    "through",
+    "using",
+    "very",
+    "want",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "while",
+    "will",
+    "with",
+    "would",
+    "your",
+];
+
+/// Content words of a cue: four letters or more, not [CUE_STOP].
+/// Shorter tokens are how a sentence matches every lesson.
+fn cue_content_words(text: &str) -> Vec<String> {
+    let mut words: Vec<String> = text
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() >= 4)
+        .map(str::to_lowercase)
+        .filter(|w| !CUE_STOP.contains(&w.as_str()))
+        .collect();
+    words.sort_unstable();
+    words.dedup();
+    words
+}
+
+/// Whether a lesson names something the cue names.
+/// A high search score on a vague sentence is not that.
+fn names_the_cue(text: &str, cue: &str) -> bool {
+    let want = cue_content_words(cue);
+    if want.is_empty() {
+        return false;
+    }
+    let have = cue_content_words(text);
+    want.iter().any(|w| have.binary_search(w).is_ok())
+}
 
 /// The pack note for a prompt, and the memory ids named in it.
 /// The ids are not marked seen here: the caller marks them when the runner
@@ -2136,6 +2228,7 @@ pub fn hook_note(call: &HookCall, limit: usize) -> (String, Vec<String>) {
         .filter(|h| !UNREVIEWED_KINDS.contains(&h.kind.as_str()))
         .filter(|h| h.score >= top * HOOK_SCORE_FLOOR)
         .filter(|h| agreed(h))
+        .filter(|h| names_the_cue(&h.text, cue))
         .filter(|h| h.id.as_ref().is_none_or(|id| !seen.contains(id)))
         .collect();
     rows.sort_by(|a, b| {
@@ -10928,6 +11021,19 @@ mod tests {
         assert!(!agreed(&hit(Some(1), Some(3))));
         assert!(agreed(&hit(Some(1), Some(1))));
         assert!(agreed(&hit(None, None)));
+        assert!(names_the_cue(
+            "OpenCPMD Fortran calls the rgsaddle band API.",
+            "plot the eon outputs with opencpmd and chemparseplot"
+        ));
+        assert!(!names_the_cue(
+            "A submitted CQA packet uses the reviewer-edited Org quotes.",
+            "plot the eon outputs with chemparseplot"
+        ));
+        assert!(!names_the_cue(
+            "A doc comment states what an item does and one why.",
+            "why are you not making real images"
+        ));
+        assert!(!names_the_cue("The fuse default is CombMNZ.", "why"));
     }
 
     #[test]

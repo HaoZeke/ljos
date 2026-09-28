@@ -4,6 +4,9 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
+- A pack note is injected only when the lesson names a content word of
+  the prompt. A high score on a vague sentence is not relevance.
+
 - A panel matches personas on topic domains. A `sync:` scope stamped on
   the roster is not a topic, so it does not seat everyone who carries it.
 
