@@ -4,9 +4,11 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
-- A runner that discards prompt-hook stdout still receives the pack note.
-  The note is held until `Stop`, an empty later prompt does not erase it,
-  and the memory ids are marked seen only once that note is emitted.
+- A runner that discards prompt-hook stdout still receives the pack note,
+  on the first tool result. `Stop` speaks only when the turn ran no tool,
+  because its feedback would start another round. An empty later prompt
+  does not erase a note that has not been delivered, and the memory ids
+  are marked seen only once that note is emitted.
 
 - `ljos sync` shares the seat's memory across machines through the tracker
   repository. Each repository names a scope and its age recipients in

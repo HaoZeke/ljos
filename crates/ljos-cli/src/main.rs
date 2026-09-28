@@ -726,12 +726,14 @@ fn main() -> Result<()> {
                 };
             let verdict = tcb_rule.as_ref().or_else(|| verdict_for(&rules, &call.cue));
             // Search on the prompt. A camel-case runner discards that
-            // stdout, so the note is held and emitted on Stop, the event
-            // whose feedback reaches the model. PreToolUse / argv only decide.
+            // stdout, so the note is held and emitted on the first tool
+            // result. Stop additionalContext would start another round, so
+            // Stop speaks only when no tool ran. PreToolUse / argv only decide.
             let context = match call.event.as_str() {
                 "PreToolUse" | "argv" => String::new(),
                 "PostToolUse" => {
-                    let mut ctx = post_hook_stdout(call.shape, call.session.as_deref());
+                    let (mut ctx, ids) = post_hook_stdout(call.shape, call.session.as_deref());
+                    mark_seen(call.session.as_deref(), &ids);
                     if let Some(kind) = subagent.as_deref() {
                         let key = format!("subagent-brief:{agent}");
                         if !ljos_cli::seen_ids(call.session.as_deref()).contains(&key) {
@@ -750,8 +752,10 @@ fn main() -> Result<()> {
                     }
                     ctx
                 }
-                // Stop is the event whose feedback reaches a runner that
-                // discards prompt-hook stdout. The ids are marked only here.
+                // A turn with no tool never fired PostToolUse. Stop is the
+                // only channel left, and its feedback does start another
+                // round. A turn that already delivered on PostToolUse
+                // finds an empty hold and ends.
                 "Stop" => {
                     let (ctx, ids) = stop_hook_stdout(call.session.as_deref(), stop_active);
                     mark_seen(call.session.as_deref(), &ids);

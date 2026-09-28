@@ -2042,22 +2042,25 @@ pub fn prompt_hook_stdout(
     }
 }
 
-/// Stdout for a tool-result hook. A camel-case runner echoes the held note
-/// once and leaves it for `Stop`. Any other runner takes it.
+/// Stdout for a tool-result hook, and the ids to mark now that the note
+/// was delivered. A camel-case runner takes the note on the first tool
+/// result. `Stop` additionalContext would start another round, so the
+/// hold is cleared here and `Stop` finds nothing. Any other runner takes
+/// it the same way. A turn with no tool leaves the hold for `Stop`.
 #[must_use]
-pub fn post_hook_stdout(shape: HookShape, session: Option<&str>) -> String {
+pub fn post_hook_stdout(shape: HookShape, session: Option<&str>) -> (String, Vec<String>) {
     if shape == HookShape::CamelCase {
         let key = "hold-echoed".to_string();
         if seen_ids(session).contains(&key) {
-            return String::new();
+            return (String::new(), Vec::new());
         }
-        let text = peek_hook_context(session);
+        let (text, ids) = take_hook_note(session);
         if !text.is_empty() {
             mark_seen(session, &[key]);
         }
-        text
+        (text, ids)
     } else {
-        take_hook_context(session)
+        (take_hook_context(session), Vec::new())
     }
 }
 
@@ -2163,8 +2166,9 @@ pub fn hook_note(call: &HookCall, limit: usize) -> (String, Vec<String>) {
 }
 
 /// The context the hook injects. A camel-case runner does not see prompt
-/// stdout, so the ids stay unmarked until [`stop_hook_stdout`] delivers
-/// them. Every other runner is shown this string and the ids are marked now.
+/// stdout, so the ids stay unmarked until the first tool result, or `Stop`
+/// when the turn ran no tool, delivers them. Every other runner is shown
+/// this string and the ids are marked now.
 #[must_use]
 pub fn hook_context(call: &HookCall, limit: usize) -> String {
     let (text, ids) = hook_note(call, limit);
@@ -11119,13 +11123,20 @@ mod tests {
             ),
             ""
         );
-        assert_eq!(post_hook_stdout(HookShape::CamelCase, Some(&session)), "pack line");
-        assert_eq!(post_hook_stdout(HookShape::CamelCase, Some(&session)), "");
-        let (delivered, ids) = stop_hook_stdout(Some(&session), false);
-        assert_eq!(delivered, "pack line");
-        assert_eq!(ids, ["m1"]);
-        assert!(stop_hook_stdout(Some(&session), false).0.is_empty());
-        assert!(stop_hook_stdout(Some(&session), true).0.is_empty());
+        let (echoed, echo_ids) = post_hook_stdout(HookShape::CamelCase, Some(&session));
+        assert_eq!(echoed, "pack line");
+        assert_eq!(echo_ids, ["m1"]);
+        assert!(post_hook_stdout(HookShape::CamelCase, Some(&session)).0.is_empty());
+        assert!(
+            stop_hook_stdout(Some(&session), false).0.is_empty(),
+            "a delivered tool result leaves Stop nothing to say"
+        );
+        let quiet = format!("quiet-{}", std::process::id());
+        hold_hook_note(Some(&quiet), "no tool", &["m2".to_string()]);
+        let (delivered, ids) = stop_hook_stdout(Some(&quiet), false);
+        assert_eq!(delivered, "no tool");
+        assert_eq!(ids, ["m2"]);
+        assert!(stop_hook_stdout(Some(&quiet), true).0.is_empty());
         let argv = hook_call("rm -rf build");
         assert_eq!(argv.event, "argv");
         assert_eq!(argv.session, None);
