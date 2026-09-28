@@ -2267,16 +2267,16 @@ fn names_a_commit(text: &str) -> bool {
         })
 }
 
-/// A standing claim is a refresher. `horizon:transient` is not.
-/// An atom written before the tag is judged by the same rule as a new one.
+/// A standing claim is a refresher. An episode is not, and neither is a
+/// lesson written before the tag: rehearsal promotes it.
 fn is_refresher(hit: &Hit) -> bool {
+    if hit.kind == "preference" {
+        return true;
+    }
     if hit.entities.iter().any(|e| e == "horizon:transient") {
         return false;
     }
-    if hit.entities.iter().any(|e| e == "horizon:standing") {
-        return true;
-    }
-    !is_transient(&hit.text)
+    hit.entities.iter().any(|e| e == "horizon:standing")
 }
 
 /// The pack note for a prompt, and the memory ids named in it.
@@ -2307,7 +2307,10 @@ pub fn hook_note(call: &HookCall, limit: usize) -> (String, Vec<String>) {
         }
         nudge.push_str(&extra);
     }
-    let Ok(hits) = packset_search(cue) else {
+    // The cross-encoder reads the prompt and the claim together. The lexical
+    // search is the fallback when that stage is down, and it still refuses
+    // an episode.
+    let Ok(hits) = packset_search_opts(cue, 10, true).or_else(|_| packset_search(cue)) else {
         return (nudge, pending);
     };
     let top = hits.iter().map(|h| h.score).fold(0.0_f64, f64::max);
@@ -3366,10 +3369,14 @@ fn post_claim_horizon(
 }
 
 /// `horizon:standing` or `horizon:transient` on a claim as it is written.
-/// A preference is standing. A lesson is transient when it names one
-/// artifact, unless the caller said which it is.
-fn stamp_horizon(atom: &mut Value, kind: &str, text: &str, force: Option<bool>) {
-    let transient = force.unwrap_or(kind == "lesson" && is_transient(text));
+/// A preference is a rule. A lesson is an episode until a recalled review
+/// or a consolidation promotes it, unless the caller said which it is.
+fn stamp_horizon(atom: &mut Value, kind: &str, _text: &str, force: Option<bool>) {
+    let transient = match (kind, force) {
+        ("preference", _) => false,
+        (_, Some(flag)) => flag,
+        _ => true,
+    };
     let tag = if transient {
         "horizon:transient"
     } else {
@@ -11199,6 +11206,17 @@ mod tests {
             of: None,
         };
         assert!(!is_refresher(&tagged));
+        let untagged = Hit {
+            id: None,
+            text: "A PR branch has to contain main.".into(),
+            score: 1.0,
+            kind: "lesson".into(),
+            ts: None,
+            entities: vec![],
+            ballots: None,
+            of: None,
+        };
+        assert!(!is_refresher(&untagged));
     }
 
     #[test]
@@ -13258,7 +13276,7 @@ mod tests {
         assert!(req.contains("\"kind\":\"lesson\""), "{req}");
         assert!(req.contains("the default fuse is CombMNZ"), "{req}");
         assert!(req.contains("\"level\":\"explicit\""), "{req}");
-        assert!(req.contains("horizon:standing"), "{req}");
+        assert!(req.contains("horizon:transient"), "{req}");
         assert!(!req.contains("extract"), "{req}");
     }
 

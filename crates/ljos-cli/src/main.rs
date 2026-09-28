@@ -34,16 +34,16 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Remember one lesson that will still be true next sitting. Two sentences at most.
+    /// Remember one lesson. It is stored as an episode until a recalled review promotes it.
     Remember {
         text: Vec<String>,
         /// Remember as this persona: the lesson comes back to it first in its next brief.
         #[arg(long = "as")]
         as_persona: Option<String>,
-        /// This claim is about one review or one run. It is stored, and it is not a refresher.
+        /// Store this as an episode. It is kept, and it is not a refresher. This is the default.
         #[arg(long)]
         transient: bool,
-        /// Keep this claim as a standing rule even though it names one artifact.
+        /// Store this as a standing rule now, without waiting for a review.
         #[arg(long)]
         standing: bool,
     },

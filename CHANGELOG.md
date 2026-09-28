@@ -4,12 +4,13 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
-- A pack note is injected only when the lesson names a content word of
-  the prompt, and only when the claim is standing. `ljos remember`
-  tags `horizon:transient` or `horizon:standing` as it writes. A
-  numbered pull request, a ticket id, or a commit is transient unless
-  the caller says otherwise. A transient claim is kept and is not a
-  refresher. An older claim with no tag is judged by that same rule.
+- A lesson is stored as an episode (`horizon:transient`). It is kept
+  and it is not a refresher. A recalled review promotes it to
+  `horizon:standing`, and so does consolidation when the lesson
+  replaces an earlier claim. `ljos remember --standing` writes the
+  rule immediately. A preference is standing. The pack note asks the
+  cross-encoder and injects standing claims only. A lesson with no
+  horizon tag is an episode.
 
 - A panel matches personas on topic domains. A `sync:` scope stamped on
   the roster is not a topic, so it does not seat everyone who carries it.

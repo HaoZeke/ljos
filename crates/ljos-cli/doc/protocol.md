@@ -100,9 +100,11 @@ Every piece of work has an issue before it has a claim.
   `deedar create file --name NAME --path PATH --agent NAME` prints an
   accession; `ljos deed ISSUE --add ACCESSION` cites it on the issue.
   Citing a deed names it; the bytes stay in deedar.
-- Every lesson that will still be true next sitting is one `ljos remember`
-  of two short sentences at most. A standing choice between two ways is one
-  `ljos prefer`. Never a transcript, never a summary of the session. A
+- A lesson is one `ljos remember` of two short sentences at most. It is
+  stored as an episode and is not a refresher until `ljos graded ID`
+  recalls it, or until consolidation finds it replaced an earlier claim.
+  `ljos remember --standing` writes a rule now. A standing choice between
+  two ways is one `ljos prefer`. Never a transcript, never a summary of the session. A
   correction from the person ("you should have", "do you not remember")
   is a preference the pack does not hold: write it with `ljos prefer`
   before the work it corrects, not after. A

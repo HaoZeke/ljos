@@ -679,7 +679,7 @@ impl LjosServer {
     // ---- the pack --------------------------------------------------------
 
     #[tool(
-        description = "Call this when the work taught something. One lesson, two short sentences at most, stored as given. Pass transient true when the claim is about one review or one run: it is kept, and it is not repeated as a refresher. Omit transient and a numbered pull request, a ticket id, or a commit is tagged transient; anything else is tagged standing. Pass transient false to keep a rule that names one artifact. Never a transcript. Progress notes go on the issue.",
+        description = "Call this when the work taught something. One lesson, two short sentences at most, stored as an episode: it is kept and it is not a refresher until a recalled review or a consolidation promotes it. Pass transient false to store a standing rule now. Pass transient true to force an episode. Never a transcript. Progress notes go on the issue.",
         annotations(
             title = "Remember",
             read_only_hint = false,
