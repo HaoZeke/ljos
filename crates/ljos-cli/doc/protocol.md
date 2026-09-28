@@ -146,8 +146,9 @@ Every piece of work has an issue before it has a claim.
   there was one option. Act on the shares when polarization is about zero
   and two or more options were named. When polarization is away from zero,
   the mean is not a position the group reached. A tally printed later is
-  who voted. On a hard question add a forecast beside the
-  ballot, `ljos predict ISSUE --expect OPTION`; with two or more forecasts
+  who voted. On a hard question the ballot carries the private forecast
+  of the others, `ljos vote ISSUE --for OPTION --expect OPTION`; `ljos predict`
+  still records one on its own. With two or more forecasts
   the settle also names the surprisingly popular answer, the option whose
   actual share most exceeds its forecast, and shows each voter's standing.
   When the world says which option was right, `ljos finish ISSUE

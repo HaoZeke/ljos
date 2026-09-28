@@ -182,6 +182,23 @@ pub struct RuleArgs {
     pub why: String,
 }
 
+/// An option name, or a JSON object of option to share.
+/// Empty and null are absent, so a ballot without a forecast still stands.
+fn expect_text(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(s) => {
+            let s = s.trim();
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        }
+        other => Some(other.to_string()),
+    }
+}
+
 /// A ballot, or a request for the tally.
 #[derive(Deserialize, JsonSchema)]
 pub struct VoteArgs {
@@ -195,6 +212,11 @@ pub struct VoteArgs {
     /// Deed accessions this ballot used, comma-separated, or `none`.
     /// Required when `choice` is set.
     pub used: Option<String>,
+    /// The option you expect the others to pick, or an object of option to
+    /// share. Recorded with the ballot, so the surprisingly popular reading
+    /// does not depend on a second call. Absent, the ballot stands alone.
+    #[serde(default)]
+    pub expect: Option<serde_json::Value>,
     /// Cast as this persona (a name written with `ljos_persona`) instead of
     /// the seat's own identity.
     #[serde(rename = "as")]
@@ -919,7 +941,7 @@ impl LjosServer {
     }
 
     #[tool(
-        description = "Call this when a decision has more than one defensible answer: cast one ballot, or omit the option to read the count. Pass `confidence` in (0, 1], the probability that the choice is the outcome (DeGroot 1974, doi:10.1080/01621459.1974.10480137). Omit it only when you are not forecasting; a hard vote is not scored. Pass `used` as comma-separated deed accessions, or `none` when the ballot used no deed (doi:10.1007/3-540-44503-X_20). The text that comes back is a count, not the settle. Call ljos_consensus before acting. Pass `as` for a persona.",
+        description = "Call this when a decision has more than one defensible answer: cast one ballot, or omit the option to read the count. Pass `confidence` in (0, 1], the probability that the choice is the outcome (DeGroot 1974, doi:10.1080/01621459.1974.10480137). Omit it only when you are not forecasting; a hard vote is not scored. Pass `expect` as the option you think the others will pick, or an object of option to share: that private forecast is what the surprisingly popular reading needs, and it belongs on this ballot rather than a later call. Pass `used` as comma-separated deed accessions, or `none` when the ballot used no deed (doi:10.1007/3-540-44503-X_20). The text that comes back is a count, not the settle. Call ljos_consensus before acting. Pass `as` for a persona.",
         annotations(
             title = "Vote",
             read_only_hint = false,
@@ -954,6 +976,14 @@ impl LjosServer {
                 }
                 let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
                 let mut said = habitat_as("vissue", &refs, args.as_persona.as_deref())?;
+                if let Some(text) = args.expect.as_ref().and_then(expect_text) {
+                    let who = identity_or_seat(args.as_persona.as_deref())
+                        .unwrap_or_else(|| "seat".to_string());
+                    write_prediction(&args.issue, &who, &text).map_err(refused)?;
+                    said.0
+                        .text
+                        .push_str(&format!("forecast recorded for {who}\n"));
+                }
                 said.0
                     .text
                     .push_str(&ljos_cli::persist_tracker(&args.issue, "ballot cast"));
@@ -1841,7 +1871,8 @@ impl LjosServer {
                 not the seat's, and the next walk follows them. `ljos_remember` with `as` writes what it \
                 concluded into its own set. It ends by casting exactly one ballot: `ljos_vote` \
                 on {issue} with `as` set to the persona's name, for the option it would defend. \
-                The ballot carries `confidence` in (0, 1] and `used` as the deeds it drew on, or `none`. \
+                The ballot carries `confidence` in (0, 1], `expect` as what it thinks the others \
+                will pick, and `used` as the deeds it drew on, or `none`. \
                 The line that comes back is a count. The settle is the next step. \
                 Subagents run in parallel and do not see each other's ballots. One playbook \
                 step per subagent; do not resume across phases.\n\

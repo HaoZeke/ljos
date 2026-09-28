@@ -36,7 +36,8 @@ ljos trust alice bob 0.8 --why deed-… [--about docs]
 ljos persona reviewer --anchor 0.2 --view "Reads for what breaks in production." --about release
 ljos playbooks                                 # sit, arena, land, company-panel, overnight
 ljos playbook vissue-xxxx company-panel        # bind a recipe; sitting copies the body before recall; panel refuses until then
-ljos predict vissue-xxxx --expect ship          # forecast the others; two forecasts and consensus names the surprisingly popular answer
+ljos vote vissue-xxxx --for hold --expect ship --confidence 0.6 --used none
+ljos predict vissue-xxxx --expect ship          # the same forecast on its own; two forecasts and consensus names the surprisingly popular answer
 ljos rule '*--force*' --verdict deny --why "Never force push."   # argv law in the pack; the hook and policy enforce it
 ljos brief reviewer vissue-xxxx                # what a subagent playing reviewer starts from
 ljos remember --as reviewer "..."              # a lesson the persona keeps; its next brief opens with it

@@ -2325,10 +2325,10 @@ pub fn held_issue() -> Option<String> {
 #[must_use]
 pub fn subagent_brief(kind: &str, issue: &str, decision: bool) -> String {
     let judge = if decision {
-        format!("{issue} is a decision: end with your ballot, `ljos vote {issue} --for OPTION --as ROLE`.")
+        format!("{issue} is a decision: end with your ballot, `ljos vote {issue} --for OPTION --expect OPTION --as ROLE`.")
     } else {
         format!(
-            "A judgement between options is a ballot: `ljos vote {issue} --for OPTION --as ROLE`."
+            "A judgement between options is a ballot: `ljos vote {issue} --for OPTION --expect OPTION --as ROLE`."
         )
     };
     format!(
@@ -2356,12 +2356,12 @@ pub fn subagent_stop_reason(
     Some(if decision {
         format!(
             "{issue} is a decision your parent holds. Before you stop, cast your ballot: \
-             `ljos vote {issue} --for OPTION --as ROLE` (ROLE: your persona, else `{kind}`)."
+             `ljos vote {issue} --for OPTION --expect OPTION --as ROLE` (ROLE: your persona, else `{kind}`)."
         )
     } else {
         format!(
             "You worked under {issue}. Before you stop: if your result settles a choice, \
-             `ljos vote {issue} --for OPTION --as ROLE`; if it taught something that holds next time, \
+             `ljos vote {issue} --for OPTION --expect OPTION --as ROLE`; if it taught something that holds next time, \
              `ljos remember \"...\" --as ROLE`. Otherwise stop."
         )
     })
@@ -2473,7 +2473,7 @@ fn decision_nudge(call: &HookCall) -> Option<(String, String)> {
         "This prompt puts a choice. Before choosing: put it on an issue whose body has an \
          `Options: A, B` line, then `ljos sitting ISSUE` writes one brief per persona the \
          title names; start one subagent per brief, each casting `ljos vote ISSUE --for \
-         OPTION --as NAME`, and settle with `ljos consensus ISSUE`."
+         OPTION --expect OPTION --as NAME`, and settle with `ljos consensus ISSUE`."
             .to_string(),
     ))
 }
@@ -3531,7 +3531,7 @@ A panel of personas on one bound recipe.
 1. Bind `company-panel` before any persona enters. `ljos panel` refuses if none is bound.
 2. Every persona has one unscoped inbound trust row; `--about` only adds weight.
 3. `ljos brief NAME ISSUE` reprints this recipe in full, the five named principles, and the arena rubric.
-4. One subagent per persona, optional model-family spawn hints. Each casts `ljos vote ISSUE --for OPTION --as NAME`. Then `ljos consensus ISSUE`.
+4. One subagent per persona, optional model-family spawn hints. Each casts `ljos vote ISSUE --for OPTION --expect OPTION --as NAME`. `--expect` is the private forecast of the others, for the surprisingly popular reading. Then `ljos consensus ISSUE`.
 5. Do not resume across phases. A new task is a new sitting.
 ";
 
@@ -4128,8 +4128,9 @@ pub fn brief(name: &str, issue: &str) -> Result<String> {
         "\nWalk the island as yourself before the ballot: `ljos island` on the work with `--as {}`. \
          The number on a row is spread along your links, not a rank of what is true. \
          Pass `--fire` only after you have used that island. Fire rewrites your weights, not the seat's, and the next walk of the same cue follows them. \
-         End with one ballot: `ljos vote {{issue}} --for OPTION --confidence P --used deed-... --as {}`. \
-         P is the probability you give that the choice is the outcome. \
+         End with one ballot: `ljos vote {{issue}} --for OPTION --expect OPTION --confidence P --used deed-... --as {}`. \
+         --expect is what you think the others will pick, or a JSON object of option to share; the surprisingly popular reading needs that forecast on the same command. \
+         P is the probability you give that your own choice is the outcome. \
          --used none records that the ballot drew on no deed. \
          The line it prints is a count. `ljos consensus {{issue}}` is the settle. \
          A lesson of your own goes in with `ljos remember --as {} \"...\"`.\n",
@@ -8162,7 +8163,7 @@ pub fn finish(
         if ballots < 2 {
             bail!(
                 "finish: {issue} is a decision and holds {ballots} ballot{}; run the panel \
-                 (`ljos panel {issue}`), have each persona cast `ljos vote {issue} --for OPTION --as NAME`, \
+                 (`ljos panel {issue}`), have each persona cast `ljos vote {issue} --for OPTION --expect OPTION --as NAME`, \
                  settle with `ljos consensus {issue}`, then --close. Nothing was written",
                 if ballots == 1 { "" } else { "s" }
             );
@@ -10683,12 +10684,16 @@ mod tests {
         assert_eq!(hook_subagent(r#"{"hook_event_name":"Stop"}"#).0, None);
         let brief = subagent_brief("explore", "acme-12ab", true);
         assert!(
-            brief.contains("Do not open a sitting") && brief.contains("ljos vote acme-12ab"),
+            brief.contains("Do not open a sitting")
+                && brief.contains("ljos vote acme-12ab")
+                && brief.contains("--expect"),
             "{brief}"
         );
         let decide = subagent_stop_reason("explore", Some("acme-12ab"), true, false).unwrap();
         assert!(
-            decide.contains("decision") && decide.contains("--as ROLE"),
+            decide.contains("decision")
+                && decide.contains("--expect")
+                && decide.contains("--as ROLE"),
             "{decide}"
         );
         let plain = subagent_stop_reason("explore", Some("acme-12ab"), false, false).unwrap();
@@ -11645,6 +11650,10 @@ mod tests {
             "{arena}"
         );
         assert!(arena.contains("ljos vote --as"), "{arena}");
+        assert!(
+            COMPANY_PANEL_BODY.contains("--expect"),
+            "a panel ballot carries the private forecast: {COMPANY_PANEL_BODY}"
+        );
         match before {
             Some(v) => unsafe { std::env::set_var("XDG_RUNTIME_DIR", v) },
             None => unsafe { std::env::remove_var("XDG_RUNTIME_DIR") },

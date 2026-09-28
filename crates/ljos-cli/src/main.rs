@@ -8,14 +8,13 @@ use ljos_cli::{
     format_consolidation, format_doctor, format_findings, format_hits, format_hubs, format_island,
     format_personas, format_playbooks, format_readings, format_remembered, format_seat,
     format_steps, format_write_ack, graded, habit, habits, handover, healthy, hook_call, hook_note,
-    hook_output_ruled, island_entities, join, learn_anchors, mark_seen, post_hook_stdout,
-    learn_and_write, learn_reading, learn_shared, now_utc, on_path, onboard, pack,
-    packset_consolidate, packset_forget, packset_hubs, packset_island_as, packset_search_as_of,
-    packset_write_as, panel, panel_steps, parse_every, personas_from_pack, playbooks_from_pack,
-    policy_with_memory, policyd_required, predictions_of, prompt_hook_stdout, read_campaign,
-    receive, release,
-    remember_findings, resolve_assignee, rows_about, rules_from_pack, run, run_as, run_captured,
-    session_end, sitting_gated, stop_hook_stdout, tcb_check, timeline, topic_words,
+    hook_output_ruled, identity_or_seat, island_entities, join, learn_anchors, learn_and_write,
+    learn_reading, learn_shared, mark_seen, now_utc, on_path, onboard, pack, packset_consolidate,
+    packset_forget, packset_hubs, packset_island_as, packset_search_as_of, packset_write_as, panel,
+    panel_steps, parse_every, personas_from_pack, playbooks_from_pack, policy_with_memory,
+    policyd_required, post_hook_stdout, predictions_of, prompt_hook_stdout, read_campaign, receive,
+    release, remember_findings, resolve_assignee, rows_about, rules_from_pack, run, run_as,
+    run_captured, session_end, sitting_gated, stop_hook_stdout, tcb_check, timeline, topic_words,
     tracker_show_json, trim_num, trust_from_pack, verdict_for, whoami, write_persona,
     write_prediction, write_rule, write_trust, Persona, Reading, Rule, Trust, HARNESSES_EXAMPLE,
     LEARN_BETA, POLICY_TCB, PROTOCOL,
@@ -135,6 +134,11 @@ enum Cmd {
         /// Required when `--for` is set.
         #[arg(long)]
         used: Option<String>,
+        /// The option you expect the others to pick, or a JSON object of
+        /// option to share. Same command as the ballot, so the surprisingly
+        /// popular reading has a forecast without a second verb.
+        #[arg(long)]
+        expect: Option<String>,
         /// Cast as this persona instead of the seat's identity.
         #[arg(long = "as")]
         as_persona: Option<String>,
@@ -546,6 +550,7 @@ fn main() -> Result<()> {
             choice,
             confidence,
             used,
+            expect,
             as_persona,
         } => match choice {
             Some(c) => {
@@ -557,7 +562,7 @@ fn main() -> Result<()> {
                 }
                 let mut args = vec![
                     "vote".to_string(),
-                    issue,
+                    issue.clone(),
                     "--for".into(),
                     c,
                     "--used".into(),
@@ -569,7 +574,15 @@ fn main() -> Result<()> {
                 }
                 let refs: Vec<&str> = args.iter().map(String::as_str).collect();
                 run_as("vissue", &refs, as_persona.as_deref())?;
-                print!("{}", ljos_cli::persist_tracker(&args[1], "ballot cast"));
+                if let Some(expect) = expect.as_deref().map(str::trim).filter(|e| !e.is_empty()) {
+                    let who =
+                        identity_or_seat(as_persona.as_deref()).unwrap_or_else(whoami_tracker);
+                    write_prediction(&issue, &who, expect).with_context(|| {
+                        format!("ballot cast; forecast for {who} was not recorded")
+                    })?;
+                    println!("forecast recorded for {who}");
+                }
+                print!("{}", ljos_cli::persist_tracker(&issue, "ballot cast"));
             }
             None => run("vissue", &["vote", &issue])?,
         },

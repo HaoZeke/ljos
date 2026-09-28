@@ -4,6 +4,12 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
+- `ljos vote --expect` records the private forecast of the others on the
+  same command as the ballot. Briefs, the company-panel recipe, and the
+  subagent stop line name that flag. `ljos predict` still records a
+  forecast on its own. Two or more forecasts and `ljos consensus` names
+  the surprisingly popular answer.
+
 - A runner that discards prompt-hook stdout still receives the pack note,
   on the first tool result. `Stop` speaks only when the turn ran no tool,
   because its feedback would start another round. An empty later prompt
