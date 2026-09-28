@@ -2187,6 +2187,45 @@ fn names_the_cue(text: &str, cue: &str) -> bool {
     want.iter().any(|w| have.binary_search(w).is_ok())
 }
 
+/// A claim about one numbered pull request is a snapshot of that review.
+/// "A PR branch must contain main" is a rule and stays. "PR 32 replays PR 36" does not.
+fn names_a_numbered_pr(text: &str) -> bool {
+    let t = text.to_lowercase();
+    let b = t.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if (i == 0 || !b[i - 1].is_ascii_alphanumeric()) && pr_number_at(&t[i..]) {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// `rest` begins at a pull-request word. True when a number follows it.
+fn pr_number_at(rest: &str) -> bool {
+    let after = if let Some(s) = rest.strip_prefix("pull requests") {
+        s
+    } else if let Some(s) = rest.strip_prefix("pull request") {
+        s
+    } else if let Some(s) = rest.strip_prefix("prs") {
+        if s.starts_with(|c: char| c.is_ascii_alphanumeric()) {
+            return false;
+        }
+        s
+    } else if let Some(s) = rest.strip_prefix("pr") {
+        if s.starts_with(|c: char| c.is_ascii_alphabetic()) {
+            return false;
+        }
+        s
+    } else {
+        return false;
+    };
+    let after = after.trim_start();
+    let after = after.strip_prefix('#').unwrap_or(after).trim_start();
+    after.starts_with(|c: char| c.is_ascii_digit())
+}
+
 /// The pack note for a prompt, and the memory ids named in it.
 /// The ids are not marked seen here: the caller marks them when the runner
 /// delivers the note. A camel-case prompt hook's stdout is discarded, so
@@ -2229,6 +2268,7 @@ pub fn hook_note(call: &HookCall, limit: usize) -> (String, Vec<String>) {
         .filter(|h| h.score >= top * HOOK_SCORE_FLOOR)
         .filter(|h| agreed(h))
         .filter(|h| names_the_cue(&h.text, cue))
+        .filter(|h| !names_a_numbered_pr(&h.text))
         .filter(|h| h.id.as_ref().is_none_or(|id| !seen.contains(id)))
         .collect();
     rows.sort_by(|a, b| {
@@ -11034,6 +11074,16 @@ mod tests {
             "why are you not making real images"
         ));
         assert!(!names_the_cue("The fuse default is CombMNZ.", "why"));
+        assert!(!names_a_numbered_pr(
+            "A PR branch has to contain main before it merges."
+        ));
+        assert!(names_a_numbered_pr(
+            "Pull requests 32 and 36 share one tree, and PR 32 replays PR 36."
+        ));
+        assert!(names_a_numbered_pr("rgpot #80 left a sibling behind main."));
+        assert!(!names_a_numbered_pr(
+            "The prompt hook holds the pack note until the first tool result."
+        ));
     }
 
     #[test]

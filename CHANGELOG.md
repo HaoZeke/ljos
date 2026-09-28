@@ -5,7 +5,10 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 ## Unreleased
 
 - A pack note is injected only when the lesson names a content word of
-  the prompt. A high score on a vague sentence is not relevance.
+  the prompt. A high score on a vague sentence is not relevance. A
+  lesson that names a numbered pull request is a snapshot of that
+  review and is not injected. A rule that says "a PR" with no number
+  still is.
 
 - A panel matches personas on topic domains. A `sync:` scope stamped on
   the roster is not a topic, so it does not seat everyone who carries it.
