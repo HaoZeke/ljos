@@ -2106,23 +2106,29 @@ pub fn hook_note(call: &HookCall, limit: usize) -> (String, Vec<String>) {
         return (String::new(), Vec::new());
     }
     // The nudges answer what the prompt says, not what the pack holds, so
-    // a prompt the pack knows nothing about still gets them.
-    let mut nudge = due_nudge(call);
-    for extra in [correction_nudge(call), decision_nudge(call)]
+    // a prompt the pack knows nothing about still gets them. Their keys
+    // travel with the note and are marked seen when a runner delivers it.
+    let (mut nudge, due_key) = due_nudge(call);
+    let mut pending = Vec::new();
+    if let Some(key) = due_key {
+        pending.push(key);
+    }
+    for (key, extra) in [correction_nudge(call), decision_nudge(call)]
         .into_iter()
         .flatten()
     {
+        pending.push(key);
         if !nudge.is_empty() {
             nudge.push('\n');
         }
         nudge.push_str(&extra);
     }
     let Ok(hits) = packset_search(cue) else {
-        return (nudge, Vec::new());
+        return (nudge, pending);
     };
     let top = hits.iter().map(|h| h.score).fold(0.0_f64, f64::max);
     if top <= 0.0 {
-        return (nudge, Vec::new());
+        return (nudge, pending);
     }
     let seen = seen_ids(call.session.as_deref());
     let mut rows: Vec<&Hit> = hits
@@ -2150,9 +2156,10 @@ pub fn hook_note(call: &HookCall, limit: usize) -> (String, Vec<String>) {
     let split = rows.iter().filter(|h| h.kind == "preference").count();
     rows[split..].sort_by_key(|h| days_of_stamp(h.ts.as_deref()).unwrap_or(i64::MAX));
     let lines: Vec<String> = rows.iter().map(|h| hit_line(h, &now)).collect();
-    let ids: Vec<String> = rows.iter().filter_map(|h| h.id.clone()).collect();
+    let mut ids: Vec<String> = rows.iter().filter_map(|h| h.id.clone()).collect();
+    ids.extend(pending);
     if lines.is_empty() {
-        return (nudge, Vec::new());
+        return (nudge, ids);
     }
     let mut out = format!(
         "What this seat already knows that bears on this (from the pack, each with its age, lessons oldest first; `ljos search` for more):\n{}",
@@ -2388,7 +2395,7 @@ pub const CORRECTION_CUES: &[&str] = &[
 /// into memory: the agent writes the preference or lesson with `ljos
 /// prefer` or `ljos remember` before it goes on. Once a session for the
 /// same cue, so a run of corrections does not repeat it.
-fn correction_nudge(call: &HookCall) -> Option<String> {
+fn correction_nudge(call: &HookCall) -> Option<(String, String)> {
     if call.event != "UserPromptSubmit" {
         return None;
     }
@@ -2398,13 +2405,13 @@ fn correction_nudge(call: &HookCall) -> Option<String> {
     if seen_ids(call.session.as_deref()).contains(&key) {
         return None;
     }
-    mark_seen(call.session.as_deref(), &[key]);
-    Some(
+    Some((
+        key,
         "This prompt reads as a correction. Before the work: write what it corrects as one \
          `ljos prefer \"...\"` (a standing choice) or `ljos remember \"...\"` (a lesson), \
          so the pack holds it and the hook can raise it next time."
             .to_string(),
-    )
+    ))
 }
 
 /// Phrases that put a choice to the agent. A choice with more than one
@@ -2448,7 +2455,7 @@ fn cue_at_word_end(text: &str, cue: &str) -> bool {
 /// On a prompt that puts a choice, the lines that take it to a panel
 /// instead of one agent's opinion. Once a session, since one decision
 /// is usually argued over several prompts.
-fn decision_nudge(call: &HookCall) -> Option<String> {
+fn decision_nudge(call: &HookCall) -> Option<(String, String)> {
     if call.event != "UserPromptSubmit" {
         return None;
     }
@@ -2461,44 +2468,48 @@ fn decision_nudge(call: &HookCall) -> Option<String> {
     if seen_ids(call.session.as_deref()).contains(&key) {
         return None;
     }
-    mark_seen(call.session.as_deref(), &[key]);
-    Some(
+    Some((
+        key,
         "This prompt puts a choice. Before choosing: put it on an issue whose body has an \
          `Options: A, B` line, then `ljos sitting ISSUE` writes one brief per persona the \
          title names; start one subagent per brief, each casting `ljos vote ISSUE --for \
          OPTION --as NAME`, and settle with `ljos consensus ISSUE`."
             .to_string(),
-    )
+    ))
 }
 
 /// On a prompt, once per session: how many claims are due for review. The
 /// review loop runs only when somebody grades, and nobody grades what they
 /// were not told about.
-fn due_nudge(call: &HookCall) -> String {
+fn due_nudge(call: &HookCall) -> (String, Option<String>) {
     if call.event != "UserPromptSubmit" {
-        return String::new();
+        return (String::new(), None);
     }
     let key = "due-nudge".to_string();
     if seen_ids(call.session.as_deref()).contains(&key) {
-        return String::new();
+        return (String::new(), None);
     }
     let Ok(client) = pack() else {
-        return String::new();
+        return (String::new(), None);
     };
     let Ok(atoms) = atoms_lean(&client, &client.workspace()) else {
-        return String::new();
+        return (String::new(), None);
     };
     let due = due_of(&atoms, &now_utc()).len();
-    // Counted once a session either way; a quiet seat is not re-counted on
-    // every prompt. Do not call consolidate here: that walk is a sitting,
+    // A quiet seat has nothing to show, so it is counted once here. A seat
+    // with claims due names the key and the caller marks it when the note
+    // is delivered. Do not call consolidate here: that walk is a sitting,
     // not a hook, and it is what made PreToolUse time out at 20s.
-    mark_seen(call.session.as_deref(), &[key]);
     if due == 0 {
-        return String::new();
+        mark_seen(call.session.as_deref(), &[key]);
+        return (String::new(), None);
     }
-    format!(
-        "{due} claim{} due for review in this seat: `ljos due`, read each, then `ljos graded ID` (or `--lapsed`).",
-        if due == 1 { " is" } else { "s are" }
+    (
+        format!(
+            "{due} claim{} due for review in this seat: `ljos due`, read each, then `ljos graded ID` (or `--lapsed`).",
+            if due == 1 { " is" } else { "s are" }
+        ),
+        Some(key),
     )
 }
 
@@ -10633,9 +10644,11 @@ mod tests {
             session: Some("corr-test".into()),
             shape: HookShape::Asks,
         };
-        let first = correction_nudge(&prompt).expect("a correction is nudged");
+        let (key, first) = correction_nudge(&prompt).expect("a correction is nudged");
         assert!(first.contains("ljos prefer"), "{first}");
-        assert!(correction_nudge(&prompt).is_none(), "once a session");
+        assert!(correction_nudge(&prompt).is_some(), "unmarked until delivered");
+        mark_seen(Some("corr-test"), &[key]);
+        assert!(correction_nudge(&prompt).is_none(), "once delivered");
         let tool = HookCall {
             event: "PreToolUse".into(),
             cue: "you should have used uv".into(),
@@ -10789,12 +10802,14 @@ mod tests {
             "dec-test",
             "UserPromptSubmit",
         );
-        let first = decision_nudge(&prompt).expect("a choice is nudged");
+        let (key, first) = decision_nudge(&prompt).expect("a choice is nudged");
         assert!(
             first.contains("Options:") && first.contains("--as NAME"),
             "{first}"
         );
-        assert!(decision_nudge(&prompt).is_none(), "once a session");
+        assert!(decision_nudge(&prompt).is_some(), "unmarked until delivered");
+        mark_seen(Some("dec-test"), &[key]);
+        assert!(decision_nudge(&prompt).is_none(), "once delivered");
         assert!(decision_nudge(&call("age vs gpg", "dec-test-2", "PreToolUse")).is_none());
         assert!(decision_nudge(&call(
             "add the timeline verb",
