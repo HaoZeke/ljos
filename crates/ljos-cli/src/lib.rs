@@ -2259,12 +2259,11 @@ fn names_a_ticket(text: &str) -> bool {
 
 /// A hex token with a digit in it. Plain words that happen to be hex have none.
 fn names_a_commit(text: &str) -> bool {
-    text.split(|c: char| !c.is_ascii_alphanumeric())
-        .any(|tok| {
-            (7..=40).contains(&tok.len())
-                && tok.chars().all(|c| c.is_ascii_hexdigit())
-                && tok.chars().any(|c| c.is_ascii_digit())
-        })
+    text.split(|c: char| !c.is_ascii_alphanumeric()).any(|tok| {
+        (7..=40).contains(&tok.len())
+            && tok.chars().all(|c| c.is_ascii_hexdigit())
+            && tok.chars().any(|c| c.is_ascii_digit())
+    })
 }
 
 /// A standing claim is a refresher. An episode is not, and neither is a
@@ -2924,8 +2923,8 @@ fn harness_rows() -> Vec<Habitat> {
         } else if h.plugin.is_none() {
             if let Some(cfg) = &h.config {
                 let path = expand(cfg);
-                let installed = std::fs::read_to_string(&path)
-                    .is_ok_and(|t| t.contains("ljos hook"));
+                let installed =
+                    std::fs::read_to_string(&path).is_ok_and(|t| t.contains("ljos hook"));
                 rows.push(Habitat {
                     name: "runner hook",
                     state: if installed {
@@ -10953,7 +10952,10 @@ mod tests {
         };
         let (key, first) = correction_nudge(&prompt).expect("a correction is nudged");
         assert!(first.contains("ljos prefer"), "{first}");
-        assert!(correction_nudge(&prompt).is_some(), "unmarked until delivered");
+        assert!(
+            correction_nudge(&prompt).is_some(),
+            "unmarked until delivered"
+        );
         mark_seen(Some("corr-test"), &[key]);
         assert!(correction_nudge(&prompt).is_none(), "once delivered");
         let tool = HookCall {
@@ -11152,7 +11154,10 @@ mod tests {
             first.contains("Options:") && first.contains("--as NAME"),
             "{first}"
         );
-        assert!(decision_nudge(&prompt).is_some(), "unmarked until delivered");
+        assert!(
+            decision_nudge(&prompt).is_some(),
+            "unmarked until delivered"
+        );
         mark_seen(Some("dec-test"), &[key]);
         assert!(decision_nudge(&prompt).is_none(), "once delivered");
         assert!(decision_nudge(&call("age vs gpg", "dec-test-2", "PreToolUse")).is_none());
@@ -11551,7 +11556,9 @@ mod tests {
         let (echoed, echo_ids) = post_hook_stdout(HookShape::CamelCase, Some(&session));
         assert_eq!(echoed, "pack line");
         assert_eq!(echo_ids, ["m1"]);
-        assert!(post_hook_stdout(HookShape::CamelCase, Some(&session)).0.is_empty());
+        assert!(post_hook_stdout(HookShape::CamelCase, Some(&session))
+            .0
+            .is_empty());
         assert!(
             stop_hook_stdout(Some(&session), false).0.is_empty(),
             "a delivered tool result leaves Stop nothing to say"

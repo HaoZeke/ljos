@@ -698,8 +698,8 @@ impl LjosServer {
             args.as_persona.as_deref(),
             args.transient,
         )
-            .map(object)
-            .map_err(refused)
+        .map(object)
+        .map_err(refused)
     }
 
     #[tool(
@@ -716,9 +716,14 @@ impl LjosServer {
         &self,
         Parameters(args): Parameters<ClaimArgs>,
     ) -> Result<Json<serde_json::Map<String, serde_json::Value>>, McpError> {
-        packset_write_as("Prefer", &args.text, args.as_persona.as_deref(), Some(false))
-            .map(object)
-            .map_err(refused)
+        packset_write_as(
+            "Prefer",
+            &args.text,
+            args.as_persona.as_deref(),
+            Some(false),
+        )
+        .map(object)
+        .map_err(refused)
     }
 
     #[tool(
