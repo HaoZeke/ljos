@@ -40,6 +40,12 @@ enum Cmd {
         /// Remember as this persona: the lesson comes back to it first in its next brief.
         #[arg(long = "as")]
         as_persona: Option<String>,
+        /// This claim is about one review or one run. It is stored, and it is not a refresher.
+        #[arg(long)]
+        transient: bool,
+        /// Keep this claim as a standing rule even though it names one artifact.
+        #[arg(long)]
+        standing: bool,
     },
     /// Prefer one way over another, as a standing preference. Stored as written.
     Prefer {
@@ -462,8 +468,23 @@ fn main() -> Result<()> {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
     match Cli::parse().cmd {
-        Cmd::Remember { text, as_persona } => {
-            let body = packset_write_as("Remember", &join(&text), as_persona.as_deref())?;
+        Cmd::Remember {
+            text,
+            as_persona,
+            transient,
+            standing,
+        } => {
+            if transient && standing {
+                bail!("remember: pass --transient or --standing, not both");
+            }
+            let horizon = if transient {
+                Some(true)
+            } else if standing {
+                Some(false)
+            } else {
+                None
+            };
+            let body = packset_write_as("Remember", &join(&text), as_persona.as_deref(), horizon)?;
             println!("{}", format_write_ack(&body));
             if let Some(ids) = body["supersedes"].as_array().filter(|ids| !ids.is_empty()) {
                 eprintln!(
@@ -478,7 +499,7 @@ fn main() -> Result<()> {
             }
         }
         Cmd::Prefer { text, as_persona } => {
-            let body = packset_write_as("Prefer", &join(&text), as_persona.as_deref())?;
+            let body = packset_write_as("Prefer", &join(&text), as_persona.as_deref(), Some(false))?;
             println!("{}", format_write_ack(&body));
         }
         Cmd::Forget { id, why } => {

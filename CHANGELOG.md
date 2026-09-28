@@ -5,10 +5,11 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 ## Unreleased
 
 - A pack note is injected only when the lesson names a content word of
-  the prompt. A high score on a vague sentence is not relevance. A
-  lesson that names a numbered pull request is a snapshot of that
-  review and is not injected. A rule that says "a PR" with no number
-  still is.
+  the prompt, and only when the claim is standing. `ljos remember`
+  tags `horizon:transient` or `horizon:standing` as it writes. A
+  numbered pull request, a ticket id, or a commit is transient unless
+  the caller says otherwise. A transient claim is kept and is not a
+  refresher. An older claim with no tag is judged by that same rule.
 
 - A panel matches personas on topic domains. A `sync:` scope stamped on
   the roster is not a topic, so it does not seat everyone who carries it.

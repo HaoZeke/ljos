@@ -2226,6 +2226,49 @@ fn pr_number_at(rest: &str) -> bool {
     after.starts_with(|c: char| c.is_ascii_digit())
 }
 
+/// A claim about one artifact: a numbered pull request, a ticket id, or a commit.
+/// That is a snapshot of one review. A rule that names no artifact is standing.
+fn is_transient(text: &str) -> bool {
+    names_a_numbered_pr(text) || names_a_ticket(text) || names_a_commit(text)
+}
+
+/// `project-ab12`, the tracker's id shape. A hyphenated English word is longer.
+fn names_a_ticket(text: &str) -> bool {
+    text.split(|c: char| !c.is_ascii_alphanumeric() && c != '-')
+        .any(|tok| {
+            let Some((head, tail)) = tok.split_once('-') else {
+                return false;
+            };
+            head.len() >= 2
+                && head.chars().all(|c| c.is_ascii_alphabetic())
+                && tail.len() == 4
+                && tail.chars().all(|c| c.is_ascii_alphanumeric())
+                && !tail.contains('-')
+        })
+}
+
+/// A hex token with a digit in it. Plain words that happen to be hex have none.
+fn names_a_commit(text: &str) -> bool {
+    text.split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|tok| {
+            (7..=40).contains(&tok.len())
+                && tok.chars().all(|c| c.is_ascii_hexdigit())
+                && tok.chars().any(|c| c.is_ascii_digit())
+        })
+}
+
+/// A standing claim is a refresher. `horizon:transient` is not.
+/// An atom written before the tag is judged by the same rule as a new one.
+fn is_refresher(hit: &Hit) -> bool {
+    if hit.entities.iter().any(|e| e == "horizon:transient") {
+        return false;
+    }
+    if hit.entities.iter().any(|e| e == "horizon:standing") {
+        return true;
+    }
+    !is_transient(&hit.text)
+}
+
 /// The pack note for a prompt, and the memory ids named in it.
 /// The ids are not marked seen here: the caller marks them when the runner
 /// delivers the note. A camel-case prompt hook's stdout is discarded, so
@@ -2268,7 +2311,7 @@ pub fn hook_note(call: &HookCall, limit: usize) -> (String, Vec<String>) {
         .filter(|h| h.score >= top * HOOK_SCORE_FLOOR)
         .filter(|h| agreed(h))
         .filter(|h| names_the_cue(&h.text, cue))
-        .filter(|h| !names_a_numbered_pr(&h.text))
+        .filter(|h| is_refresher(h))
         .filter(|h| h.id.as_ref().is_none_or(|id| !seen.contains(id)))
         .collect();
     rows.sort_by(|a, b| {
@@ -3288,12 +3331,23 @@ pub fn post_claim(
     text: &str,
     workspace: &str,
 ) -> Result<Value> {
+    post_claim_horizon(client, label, text, workspace, None)
+}
+
+fn post_claim_horizon(
+    client: &PacksetClient,
+    label: &str,
+    text: &str,
+    workspace: &str,
+    transient: Option<bool>,
+) -> Result<Value> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         bail!("{label}: empty text is not a claim");
     }
     let kind = atom_kind(label)?;
-    let atom = atom_body(kind, trimmed, workspace);
+    let mut atom = atom_body(kind, trimmed, workspace);
+    stamp_horizon(&mut atom, kind, trimmed, transient);
     with_writer(|| {
         client
             .post_atom(&atom)
@@ -3301,8 +3355,21 @@ pub fn post_claim(
     })
 }
 
+/// `horizon:standing` or `horizon:transient` on a claim as it is written.
+/// A preference is standing. A lesson is transient when it names one
+/// artifact, unless the caller said which it is.
+fn stamp_horizon(atom: &mut Value, kind: &str, text: &str, force: Option<bool>) {
+    let transient = force.unwrap_or(kind == "lesson" && is_transient(text));
+    let tag = if transient {
+        "horizon:transient"
+    } else {
+        "horizon:standing"
+    };
+    add_entities(atom, [tag.to_string()]);
+}
+
 pub fn packset_write(label: &str, text: &str) -> Result<Value> {
-    packset_write_as(label, text, None)
+    packset_write_as(label, text, None, None)
 }
 
 /// [`packset_write`] for a lesson learned on an issue: it carries an
@@ -3332,6 +3399,7 @@ pub fn packset_write_scoped(
         tags.push(format!("scope:{scope}"));
     }
     add_entities(&mut atom, tags);
+    stamp_horizon(&mut atom, kind, trimmed, None);
     with_writer(|| {
         client
             .post_atom(&atom)
@@ -3366,11 +3434,16 @@ pub fn persona_set(name: &str) -> String {
 /// so what a persona learned comes back to it first in its next brief and
 /// stays in the seat's one pack. A persona accumulates its own lessons the
 /// way a reviewer does; the seat still reads them all.
-pub fn packset_write_as(label: &str, text: &str, persona: Option<&str>) -> Result<Value> {
+pub fn packset_write_as(
+    label: &str,
+    text: &str,
+    persona: Option<&str>,
+    transient: Option<bool>,
+) -> Result<Value> {
     let client = pack()?;
     let workspace = client.workspace();
     let Some(name) = persona.map(str::trim).filter(|n| !n.is_empty()) else {
-        return post_claim(&client, label, text, &workspace);
+        return post_claim_horizon(&client, label, text, &workspace, transient);
     };
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -3379,6 +3452,7 @@ pub fn packset_write_as(label: &str, text: &str, persona: Option<&str>) -> Resul
     let kind = atom_kind(label)?;
     let mut atom = atom_body(kind, trimmed, &workspace);
     add_entities(&mut atom, [persona_entity(name)]);
+    stamp_horizon(&mut atom, kind, trimmed, transient);
     // Its own tree: the persona's conclusions replace and duplicate among
     // themselves, not against the seat's or another persona's.
     atom["set"] = Value::String(persona_set(name));
@@ -11084,6 +11158,37 @@ mod tests {
         assert!(!names_a_numbered_pr(
             "The prompt hook holds the pack note until the first tool result."
         ));
+        assert!(is_transient(
+            "Pull requests 32 and 36 share one tree, and PR 32 replays PR 36."
+        ));
+        assert!(is_transient("The closure is on ljos-wgo8."));
+        assert!(is_transient("The sweep was commit 80c73416c."));
+        assert!(!is_transient(
+            "A PR branch has to contain main before it merges."
+        ));
+        assert!(!is_transient("The prompt hook holds the pack note."));
+        let standing = Hit {
+            id: None,
+            text: "Pull requests 32 and 36 share one tree.".into(),
+            score: 1.0,
+            kind: "lesson".into(),
+            ts: None,
+            entities: vec!["horizon:standing".into()],
+            ballots: None,
+            of: None,
+        };
+        assert!(is_refresher(&standing));
+        let tagged = Hit {
+            id: None,
+            text: "A PR branch has to contain main.".into(),
+            score: 1.0,
+            kind: "lesson".into(),
+            ts: None,
+            entities: vec!["horizon:transient".into()],
+            ballots: None,
+            of: None,
+        };
+        assert!(!is_refresher(&tagged));
     }
 
     #[test]
@@ -13143,6 +13248,7 @@ mod tests {
         assert!(req.contains("\"kind\":\"lesson\""), "{req}");
         assert!(req.contains("the default fuse is CombMNZ"), "{req}");
         assert!(req.contains("\"level\":\"explicit\""), "{req}");
+        assert!(req.contains("horizon:standing"), "{req}");
         assert!(!req.contains("extract"), "{req}");
     }
 

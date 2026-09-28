@@ -58,6 +58,11 @@ pub struct ClaimArgs {
     /// next brief. Absent, the seat's own.
     #[serde(rename = "as")]
     pub as_persona: Option<String>,
+    /// `true` when this claim is about one review or one run. `false` keeps
+    /// a rule that happens to name an artifact. Absent, the writer decides:
+    /// a numbered pull request, a ticket id, or a commit is transient.
+    #[serde(default)]
+    pub transient: Option<bool>,
 }
 
 /// A question for the pack.
@@ -674,7 +679,7 @@ impl LjosServer {
     // ---- the pack --------------------------------------------------------
 
     #[tool(
-        description = "Call this when the work taught something that will still be true next sitting: one lesson, two short sentences at most, stored as given. Never a transcript or a summary of the session. Not for progress notes; those go on the issue.",
+        description = "Call this when the work taught something. One lesson, two short sentences at most, stored as given. Pass transient true when the claim is about one review or one run: it is kept, and it is not repeated as a refresher. Omit transient and a numbered pull request, a ticket id, or a commit is tagged transient; anything else is tagged standing. Pass transient false to keep a rule that names one artifact. Never a transcript. Progress notes go on the issue.",
         annotations(
             title = "Remember",
             read_only_hint = false,
@@ -687,7 +692,12 @@ impl LjosServer {
         &self,
         Parameters(args): Parameters<ClaimArgs>,
     ) -> Result<Json<serde_json::Map<String, serde_json::Value>>, McpError> {
-        packset_write_as("Remember", &args.text, args.as_persona.as_deref())
+        packset_write_as(
+            "Remember",
+            &args.text,
+            args.as_persona.as_deref(),
+            args.transient,
+        )
             .map(object)
             .map_err(refused)
     }
@@ -706,7 +716,7 @@ impl LjosServer {
         &self,
         Parameters(args): Parameters<ClaimArgs>,
     ) -> Result<Json<serde_json::Map<String, serde_json::Value>>, McpError> {
-        packset_write_as("Prefer", &args.text, args.as_persona.as_deref())
+        packset_write_as("Prefer", &args.text, args.as_persona.as_deref(), Some(false))
             .map(object)
             .map_err(refused)
     }
