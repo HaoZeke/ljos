@@ -4178,14 +4178,25 @@ pub fn format_personas(personas: &[Persona]) -> String {
         .collect()
 }
 
+/// A sync scope stamped on a persona, not a topic it speaks to.
+/// Matching on it seats the whole roster, because the scope is shared.
+fn is_scope_marker(word: &str) -> bool {
+    word.to_lowercase().starts_with("sync:")
+}
+
 pub fn personas_speaking_to(personas: &[Persona], words: &[String]) -> Vec<Persona> {
-    let words: Vec<String> = words.iter().map(|w| w.to_lowercase()).collect();
+    let words: Vec<String> = words
+        .iter()
+        .map(|w| w.to_lowercase())
+        .filter(|w| !is_scope_marker(w))
+        .collect();
     let speaking: Vec<Persona> = personas
         .iter()
         .filter(|p| {
-            p.entities
-                .iter()
-                .any(|d| words.iter().any(|w| w == &d.to_lowercase()))
+            p.entities.iter().any(|d| {
+                let d = d.to_lowercase();
+                !is_scope_marker(&d) && words.iter().any(|w| w == &d)
+            })
         })
         .cloned()
         .collect();
@@ -10554,6 +10565,19 @@ mod tests {
         );
         let specialists = vec![mk("reviewer", &["docs"]), mk("cuda", &["gpu"])];
         assert!(personas_speaking_to(&specialists, &["fortran".to_string()]).is_empty());
+        let scoped = vec![
+            mk("seatkeeper", &["seat", "ballot", "sync:rgsurflat"]),
+            mk("cuda", &["gpu", "sync:rgsurflat"]),
+        ];
+        let seated = personas_speaking_to(
+            &scoped,
+            &["ballot".to_string(), "sync:rgsurflat".to_string()],
+        );
+        assert_eq!(
+            seated.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+            ["seatkeeper"],
+            "a shared sync scope does not seat the roster"
+        );
         let mut merger = mk("merger", &["git"]);
         merger.view = "Reads a merge for the writer it silently drops.".into();
         let mut other = mk("other", &["gpu"]);

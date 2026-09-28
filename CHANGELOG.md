@@ -4,6 +4,9 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
+- A panel matches personas on topic domains. A `sync:` scope stamped on
+  the roster is not a topic, so it does not seat everyone who carries it.
+
 - `ljos vote --expect` records the private forecast of the others on the
   same command as the ballot. Briefs, the company-panel recipe, and the
   subagent stop line name that flag. `ljos predict` still records a
