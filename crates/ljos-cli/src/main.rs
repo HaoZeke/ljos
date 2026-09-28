@@ -499,7 +499,8 @@ fn main() -> Result<()> {
             }
         }
         Cmd::Prefer { text, as_persona } => {
-            let body = packset_write_as("Prefer", &join(&text), as_persona.as_deref(), Some(false))?;
+            let body =
+                packset_write_as("Prefer", &join(&text), as_persona.as_deref(), Some(false))?;
             println!("{}", format_write_ack(&body));
         }
         Cmd::Forget { id, why } => {
@@ -764,10 +765,21 @@ fn main() -> Result<()> {
             // result. Stop additionalContext would start another round, so
             // Stop speaks only when no tool ran. PreToolUse / argv only decide.
             let context = match call.event.as_str() {
-                "PreToolUse" | "argv" => String::new(),
+                "PreToolUse" | "argv" => {
+                    // A seat verb about to run resets the work count.
+                    let _ = ljos_cli::work_nudge(&call, subagent.is_some());
+                    String::new()
+                }
                 "PostToolUse" => {
                     let (mut ctx, ids) = post_hook_stdout(call.shape, call.session.as_deref());
                     mark_seen(call.session.as_deref(), &ids);
+                    if let Some(nudge) = ljos_cli::work_nudge(&call, subagent.is_some()) {
+                        ctx = if ctx.is_empty() {
+                            nudge
+                        } else {
+                            format!("{ctx}\n{nudge}")
+                        };
+                    }
                     if let Some(kind) = subagent.as_deref() {
                         let key = format!("subagent-brief:{agent}");
                         if !ljos_cli::seen_ids(call.session.as_deref()).contains(&key) {

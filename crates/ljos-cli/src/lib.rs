@@ -2413,6 +2413,64 @@ pub fn hook_subagent(input: &str) -> (Option<String>, bool, String) {
     (kind, active, agent)
 }
 
+/// Tool calls a conversation may make without a word to the seat before the
+/// hook reminds it. A sitting opened at the start and nothing after it is
+/// how long work went unrecorded.
+pub const WORK_NUDGE_EVERY: u64 = 40;
+
+/// Whether a hook call's cue is the seat's own verbs or tools.
+#[must_use]
+pub fn touches_seat(cue: &str) -> bool {
+    cue.split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .any(|w| w == "ljos" || w == "vissue" || w.starts_with("ljos_") || w.starts_with("vissue_"))
+}
+
+/// Count this conversation's tool calls since it last touched the seat, and
+/// on a `PostToolUse` that reaches [`WORK_NUDGE_EVERY`] say what to record:
+/// a note, a lesson or a deed on the issue it holds, or an issue to open
+/// when it holds none. A subagent is left to its brief.
+pub fn work_nudge(call: &HookCall, subagent: bool) -> Option<String> {
+    let session = call.session.as_deref()?;
+    let safe: String = session
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .collect();
+    if safe.is_empty() || subagent {
+        return None;
+    }
+    let path = runtime_dir().join(format!("work-{safe}"));
+    if touches_seat(&call.cue) {
+        let _ = std::fs::write(&path, "0");
+        return None;
+    }
+    if call.event != "PostToolUse" {
+        return None;
+    }
+    let count = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| t.trim().parse::<u64>().ok())
+        .unwrap_or(0)
+        + 1;
+    if count < WORK_NUDGE_EVERY {
+        let _ = std::fs::create_dir_all(runtime_dir());
+        let _ = std::fs::write(&path, count.to_string());
+        return None;
+    }
+    let _ = std::fs::write(&path, "0");
+    Some(match held_issue() {
+        Some(issue) => format!(
+            "{count} tool calls on {issue} since the seat last heard from this conversation. \
+             Record what the work has shown: progress is `vissue note {issue} \"...\"`, a lesson \
+             that holds next time is `ljos remember \"...\"`, an artifact is `ljos deed {issue} \
+             --add ACCESSION`; the work closes with `ljos finish {issue} --lesson \"...\"`."
+        ),
+        None => format!(
+            "{count} tool calls in this conversation with no issue held. Work goes on an issue: \
+             `vissue q -p PROJECT \"TITLE\"` prints an id, then `ljos sitting ID` opens it."
+        ),
+    })
+}
+
 /// With `$XDG_RUNTIME_DIR/ljos/hook-trace` present, one line per hook call
 /// to `hook-trace.jsonl` beside it: the event as sent and as read, the
 /// payload's top-level key names, the session and subagent type. Key names
@@ -11014,6 +11072,40 @@ mod tests {
             Some("acme-new2")
         );
         assert_eq!(held_from_records(&["sess-nobody".to_string()]), None);
+        unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
+    }
+
+    #[test]
+    fn a_long_run_without_the_seat_is_reminded_once_per_stretch() {
+        let _g = env_guard();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", dir.path()) };
+        let call = |cue: &str, event: &str| HookCall {
+            event: event.into(),
+            cue: cue.into(),
+            session: Some("work-test".into()),
+            shape: HookShape::Asks,
+        };
+        for _ in 1..WORK_NUDGE_EVERY {
+            assert!(work_nudge(&call("cargo test", "PostToolUse"), false).is_none());
+        }
+        let said =
+            work_nudge(&call("cargo test", "PostToolUse"), false).expect("nudged at the count");
+        assert!(
+            said.contains("no issue held") || said.contains("vissue note"),
+            "{said}"
+        );
+        assert!(
+            work_nudge(&call("cargo test", "PostToolUse"), false).is_none(),
+            "count starts over"
+        );
+        assert!(work_nudge(&call("ljos remember x", "PreToolUse"), false).is_none());
+        assert!(
+            work_nudge(&call("rg foo", "PostToolUse"), true).is_none(),
+            "a subagent has its brief"
+        );
+        assert!(touches_seat("use_tool ljos__ljos_sitting"));
+        assert!(!touches_seat("cargo build --release"));
         unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
     }
 
