@@ -4,13 +4,16 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
-- The prompt hook can ask Jev, on OpenRouter's Decisions API, which
+- The prompt hook can ask Jev, TypeSafe's decision model, which
   candidate claims bear on the prompt and whether the prompt corrects
   the agent or puts a choice. One call answers all three and replaces
   the local rerank and the phrase lists. It stays off unless
-  `~/.config/ljos/jev.toml` sets `enabled = true` and names a key file.
-  On any failure the local path answers. `ljos doctor` prints a `jev`
-  row with the month's spend.
+  `~/.config/ljos/jev.toml` sets `enabled = true` with a `key_cmd` (such
+  as `pass show`) or `key_file`. The hook skips prompts under four
+  words, prompts with fewer than two candidates, and every prompt once
+  the month's spend reaches `monthly_usd`. With Jev on, the local
+  cross-encoder is never loaded. `ljos doctor` prints a `jev` row with
+  the month's calls and spend.
 
 - A prompt or tool-result hook answers inside 8 s, with no context rather
   than being cut off by its runner; an identical call started in the last

@@ -2335,8 +2335,11 @@ pub fn hook_note(call: &HookCall, limit: usize) -> (String, Vec<String>) {
             .filter(|h| h.id.as_ref().is_none_or(|id| !seen.contains(id)))
             .collect()
     } else {
+        // A machine that turned Jev on keeps the cross-encoder unloaded; a
+        // prompt Jev was not asked about gets the lexical search.
+        let rerank = !jev::enabled();
         let reranked =
-            with_pack_timeout(HOOK_RERANK_BUDGET_MS, || packset_search_opts(cue, 10, true));
+            with_pack_timeout(HOOK_RERANK_BUDGET_MS, || packset_search_opts(cue, 10, rerank));
         let Ok(found) = reranked.or_else(|_| packset_search(cue)) else {
             return (nudge, pending);
         };
@@ -2389,20 +2392,31 @@ pub fn hook_note(call: &HookCall, limit: usize) -> (String, Vec<String>) {
 }
 
 /// The prompt's candidates and Jev's judgment of them, when this machine
-/// turned Jev on and it answered. Candidates come from the search without
-/// the local cross-encoder, which Jev replaces.
+/// turned Jev on and the prompt is worth a call: enough words to judge,
+/// at least `min_candidates` claims to choose between after the local
+/// kind, refresher and seen filters, and the month's spend under its cap.
+/// Candidates come from the search without the local cross-encoder, which
+/// Jev replaces.
 fn judged_prompt(call: &HookCall, cue: &str) -> Option<(Vec<Hit>, jev::Judgment)> {
     if call.event != "UserPromptSubmit" {
         return None;
     }
-    jev::config()?;
+    let (cfg, _) = jev::config()?;
+    if cue.split_whitespace().count() < cfg.min_words {
+        return None;
+    }
+    let seen = seen_ids(call.session.as_deref());
     let hits = packset_search_opts(cue, 10, false).ok()?;
     let candidates: Vec<Hit> = hits
         .into_iter()
         .filter(|h| !UNREVIEWED_KINDS.contains(&h.kind.as_str()))
         .filter(is_refresher)
+        .filter(|h| h.id.as_ref().is_none_or(|id| !seen.contains(id)))
         .take(10)
         .collect();
+    if candidates.len() < cfg.min_candidates {
+        return None;
+    }
     let texts: Vec<&str> = candidates.iter().map(|h| h.text.as_str()).collect();
     let judged = jev::judge(cue, &texts)?;
     Some((candidates, judged))

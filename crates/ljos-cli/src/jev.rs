@@ -1,6 +1,7 @@
-//! The prompt hook's judgments through Jev, TypeSafe's decision model on
-//! OpenRouter's Decisions API: which candidate claims bear on a prompt,
-//! whether the prompt corrects the agent, and whether it puts a choice.
+//! The prompt hook's judgments through Jev, TypeSafe's decision model, on
+//! TypeSafe's own API or OpenRouter's Decisions API: which candidate claims
+//! bear on a prompt, whether the prompt corrects the agent, and whether it
+//! puts a choice.
 //!
 //! One request answers all three: the prompt and the candidates are the
 //! state, and each judgment is a `noul` question, a probability that the
@@ -21,28 +22,74 @@ pub struct Config {
     /// Off unless set: the call sends the prompt and claims off the machine.
     #[serde(default)]
     pub enabled: bool,
-    /// A file holding the OpenRouter key, one line, mode 0600.
-    pub key_file: String,
-    /// The model the Decisions API routes to.
+    /// A file holding the key, one line, mode 0600.
+    #[serde(default)]
+    pub key_file: Option<String>,
+    /// A command that prints the key on its first line, such as
+    /// `["pass", "show", "api/typesafe/jev"]`; asked once per login and held
+    /// in the runtime directory, mode 0600.
+    #[serde(default)]
+    pub key_cmd: Option<Vec<String>>,
+    /// The model: `jev-1.13.0` on TypeSafe's API, `typesafe/jev-1.13` on
+    /// OpenRouter's.
     #[serde(default = "default_model")]
     pub model: String,
     /// How long the hook waits for the answer.
     #[serde(default = "default_budget")]
     pub budget_ms: u64,
-    /// The Decisions endpoint.
+    /// TypeSafe's endpoint, or `https://openrouter.ai/api/alpha/decisions`.
     #[serde(default = "default_endpoint")]
     pub endpoint: String,
+    /// The month's spend, in US dollars, past which the hook stops asking.
+    #[serde(default = "default_monthly")]
+    pub monthly_usd: f64,
+    /// A prompt with fewer words is an acknowledgement ("yes", "keep
+    /// going"), with too little in it for a judgment to add anything.
+    #[serde(default = "default_min_words")]
+    pub min_words: usize,
+    /// Fewer candidates than this is nothing to choose between; the local
+    /// filters answer.
+    #[serde(default = "default_min_candidates")]
+    pub min_candidates: usize,
+    /// US dollars per million input tokens, for an API whose answer does
+    /// not carry its cost. Output is not charged.
+    #[serde(default = "default_price_in")]
+    pub usd_per_mtok_in: f64,
 }
 
 fn default_model() -> String {
-    "typesafe/jev-1.13".into()
+    "jev-1.13.0".into()
 }
 fn default_budget() -> u64 {
     2000
 }
 fn default_endpoint() -> String {
-    "https://openrouter.ai/api/alpha/decisions".into()
+    "https://api.typesafe.ai/v1/systemone".into()
 }
+fn default_monthly() -> f64 {
+    4.0
+}
+fn default_min_words() -> usize {
+    4
+}
+fn default_min_candidates() -> usize {
+    2
+}
+fn default_price_in() -> f64 {
+    0.042
+}
+
+/// What a call cost: the API's own figure when it sends one (OpenRouter
+/// does), else the input tokens at the configured price.
+fn cost_of(body: &Value, usd_per_mtok_in: f64) -> f64 {
+    body["usage"]["cost"].as_f64().unwrap_or_else(|| {
+        body["usage"]["input_tokens"].as_f64().unwrap_or(0.0) * usd_per_mtok_in / 1e6
+    })
+}
+
+/// The longest prompt the state carries; a pasted log past it adds cost
+/// and no judgment.
+const PROMPT_CHARS: usize = 2000;
 
 fn config_path() -> PathBuf {
     std::env::var_os("XDG_CONFIG_HOME")
@@ -62,17 +109,90 @@ fn expand(path: &str) -> PathBuf {
     }
 }
 
-/// The machine's Jev setting, when it turned Jev on and its key is there.
-#[must_use]
-pub fn config() -> Option<(Config, String)> {
+fn read_config() -> Option<Config> {
     let text = std::fs::read_to_string(config_path()).ok()?;
-    let cfg: Config = toml::from_str(&text).ok()?;
-    if !cfg.enabled {
+    toml::from_str(&text).ok()
+}
+
+/// Whether this machine turned Jev on, key or not. The hook's local path
+/// then skips the cross-encoder, which is what Jev stands in for.
+#[must_use]
+pub fn enabled() -> bool {
+    read_config().is_some_and(|c| c.enabled)
+}
+
+/// The key from the first line of what a key file or command holds. A
+/// `name: value` or `name=value` line gives its value.
+fn key_from(text: &str) -> Option<String> {
+    let line = text.lines().next()?.trim();
+    let value = line
+        .rsplit(|c: char| c == ':' || c == '=' || c.is_whitespace())
+        .next()
+        .unwrap_or(line)
+        .trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn key_cache() -> Option<PathBuf> {
+    let dir = std::env::var_os("XDG_RUNTIME_DIR").filter(|v| !v.is_empty())?;
+    Some(PathBuf::from(dir).join("ljos").join("jev-key"))
+}
+
+/// Run the key command once, with no terminal to prompt on and three
+/// seconds to answer, and hold what it printed for the rest of the login.
+fn key_by_command(argv: &[String]) -> Option<String> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let cache = key_cache();
+    if let Some(key) = cache
+        .as_ref()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|t| key_from(&t))
+    {
+        return Some(key);
+    }
+    let (prog, args) = argv.split_first()?;
+    let out = std::process::Command::new("timeout")
+        .arg("3")
+        .arg(prog)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
         return None;
     }
-    let key = std::fs::read_to_string(expand(&cfg.key_file)).ok()?;
-    let key = key.trim().to_string();
-    (!key.is_empty()).then_some((cfg, key))
+    let key = key_from(&String::from_utf8_lossy(&out.stdout))?;
+    if let Some(path) = cache {
+        let _ = std::fs::create_dir_all(path.parent()?);
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&path)
+        {
+            let _ = writeln!(f, "{key}");
+        }
+    }
+    Some(key)
+}
+
+/// The machine's Jev setting, when it turned Jev on, its key is there and
+/// the month's spend is under its cap.
+#[must_use]
+pub fn config() -> Option<(Config, String)> {
+    let cfg = read_config()?;
+    if !cfg.enabled || month_cost().unwrap_or(0.0) >= cfg.monthly_usd {
+        return None;
+    }
+    let key = match (&cfg.key_cmd, &cfg.key_file) {
+        (Some(argv), _) => key_by_command(argv)?,
+        (None, Some(file)) => key_from(&std::fs::read_to_string(expand(file)).ok()?)?,
+        (None, None) => return None,
+    };
+    Some((cfg, key))
 }
 
 /// What Jev said about one prompt.
@@ -92,6 +212,7 @@ pub struct Judgment {
 /// `noul` per candidate and one each for a correction and a choice.
 #[must_use]
 pub fn request(model: &str, prompt: &str, candidates: &[&str]) -> Value {
+    let prompt: String = prompt.chars().take(PROMPT_CHARS).collect();
     let mut state = format!("Prompt from the person to the agent:\n{prompt}\n\nStored claims:\n");
     for (i, text) in candidates.iter().enumerate() {
         state.push_str(&format!("[{i}] {text}\n"));
@@ -148,7 +269,7 @@ pub fn parse(body: &Value, candidates: usize) -> Option<Judgment> {
         bears,
         correction: noul("correction")?,
         choice: noul("choice")?,
-        cost: body["usage"]["cost"].as_f64().unwrap_or(0.0),
+        cost: 0.0,
     })
 }
 
@@ -165,7 +286,8 @@ pub fn judge(prompt: &str, candidates: &[&str]) -> Option<Judgment> {
         .ok()?
         .into_json()
         .ok()?;
-    let judged = parse(&reply, candidates.len())?;
+    let mut judged = parse(&reply, candidates.len())?;
+    judged.cost = cost_of(&reply, cfg.usd_per_mtok_in);
     record_cost(judged.cost);
     Some(judged)
 }
@@ -186,24 +308,39 @@ fn record_cost(cost: f64) {
         .ok()
         .and_then(|t| toml::from_str(&t).ok())
         .unwrap_or_default();
+    *totals.entry(format!("{month}-calls")).or_default() += 1.0;
     *totals.entry(month).or_default() += cost;
     if let Ok(text) = toml::to_string(&totals) {
         let _ = std::fs::write(path, text);
     }
 }
 
-/// This month's recorded Jev spend, in US dollars.
-#[must_use]
-pub fn month_cost() -> Option<f64> {
+fn month_totals() -> Option<BTreeMap<String, f64>> {
     let dir = std::env::var_os("XDG_STATE_HOME")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))?
         .join("ljos");
     let text = std::fs::read_to_string(dir.join("jev-cost.toml")).ok()?;
-    let totals: BTreeMap<String, f64> = toml::from_str(&text).ok()?;
-    let month = crate::now_utc().chars().take(7).collect::<String>();
-    totals.get(&month).copied()
+    toml::from_str(&text).ok()
+}
+
+fn this_month() -> String {
+    crate::now_utc().chars().take(7).collect()
+}
+
+/// This month's recorded Jev spend, in US dollars.
+#[must_use]
+pub fn month_cost() -> Option<f64> {
+    month_totals()?.get(&this_month()).copied()
+}
+
+/// How many calls this month made.
+#[must_use]
+pub fn month_calls() -> u64 {
+    month_totals()
+        .and_then(|t| t.get(&format!("{}-calls", this_month())).copied())
+        .unwrap_or(0.0) as u64
 }
 
 /// The `jev` row in `ljos doctor`, only on a machine with a Jev file: off,
@@ -215,18 +352,22 @@ pub fn doctor_row() -> Option<crate::Habitat> {
     let (state, ok) = match toml::from_str::<Config>(&text) {
         Err(e) => (format!("{}: {e}", config_path().display()), false),
         Ok(cfg) if !cfg.enabled => ("off".to_string(), true),
-        Ok(cfg) => match config() {
-            None => (format!("on, but no key in {}", cfg.key_file), false),
-            Some(_) => (
-                format!(
-                    "on  {}  {} ms  ${:.4} this month",
-                    cfg.model,
-                    cfg.budget_ms,
-                    month_cost().unwrap_or(0.0)
-                ),
-                true,
-            ),
-        },
+        Ok(cfg) => {
+            let spent = month_cost().unwrap_or(0.0);
+            let head = format!(
+                "{}  {} calls  ${spent:.4} of ${:.2} this month",
+                cfg.model,
+                month_calls(),
+                cfg.monthly_usd
+            );
+            if spent >= cfg.monthly_usd {
+                (format!("capped  {head}"), true)
+            } else if config().is_none() {
+                ("on, but the key file or command gave no key".to_string(), false)
+            } else {
+                (format!("on  {head}"), true)
+            }
+        }
     };
     Some(crate::Habitat { name: "jev", state, ok })
 }
@@ -237,7 +378,7 @@ mod tests {
 
     #[test]
     fn one_request_asks_about_every_candidate_and_both_cues() {
-        let body = request("typesafe/jev-1.13", "fix the ci", &["alpha claim", "beta claim"]);
+        let body = request("jev-1.13.0", "fix the ci", &["alpha claim", "beta claim"]);
         let q = body["questions"].as_object().unwrap();
         assert_eq!(q.len(), 4);
         assert_eq!(q["bears_1"]["type"], "noul");
@@ -258,7 +399,9 @@ mod tests {
         let j = parse(&full, 2).unwrap();
         assert_eq!(j.bears, vec![0.9, 0.1]);
         assert!((j.choice - 0.7).abs() < 1e-9);
-        assert!((j.cost - 0.0000378).abs() < 1e-12);
+        assert!((cost_of(&full, 0.042) - 0.0000378).abs() < 1e-12, "the API's figure");
+        let direct = serde_json::json!({"usage": {"input_tokens": 1000, "output_tokens": 60}});
+        assert!((cost_of(&direct, 0.042) - 0.000042).abs() < 1e-12, "tokens at the price");
         let partial = serde_json::json!({"answers": {"bears_0": {"noul": 0.9}}});
         assert!(parse(&partial, 2).is_none());
     }
@@ -286,6 +429,15 @@ mod tests {
         let (cfg, k) = config().unwrap();
         assert_eq!(k, "sk-or-test");
         assert_eq!(cfg.budget_ms, 2000);
+        assert_eq!(cfg.min_candidates, 2);
         unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
+    }
+
+    #[test]
+    fn a_key_line_gives_its_value() {
+        assert_eq!(key_from("sk-or-v1-abc\n").as_deref(), Some("sk-or-v1-abc"));
+        assert_eq!(key_from("apikey: sk-or-v1-abc\nurl: x\n").as_deref(), Some("sk-or-v1-abc"));
+        assert_eq!(key_from("apikey=sk-or-v1-abc").as_deref(), Some("sk-or-v1-abc"));
+        assert_eq!(key_from("\n"), None);
     }
 }
