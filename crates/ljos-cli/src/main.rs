@@ -121,9 +121,15 @@ enum Cmd {
     /// Cite a deed on an issue, or list what it cites. Citing a deed names it; the bytes stay in deedar.
     Deed {
         issue: String,
-        /// The accession to cite, from `deedar create`.
+        /// An accession to cite, from `deedar create`; repeat for several.
         #[arg(long)]
-        add: Option<String>,
+        add: Vec<String>,
+    },
+    /// Who holds what on the tracker: `vissue claims`, with its flags.
+    Claims {
+        /// Passed to `vissue claims` as given (`--by NAME`, `--json`, `-p PROJECT`).
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
     /// The working set for an issue: plan, its inputs' deeds, its own citations.
     Recall { issue: String },
@@ -573,13 +579,25 @@ fn main() -> Result<()> {
         }
         Cmd::Evidence { accession } => run("deedar", &["evidence", &accession])?,
         Cmd::Current { accession } => run("deedar", &["current", &accession])?,
-        Cmd::Deed { issue, add } => match add {
-            Some(a) => {
-                run("vissue", &["deed", &issue, "--add", &a])?;
+        Cmd::Deed { issue, add } => {
+            if add.is_empty() {
+                run("vissue", &["deed", &issue])?;
+            } else {
+                let mut argv = vec!["deed".to_string(), issue.clone()];
+                for a in &add {
+                    argv.push("--add".into());
+                    argv.push(a.clone());
+                }
+                let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+                run("vissue", &refs)?;
                 print!("{}", ljos_cli::persist_tracker(&issue, "cited a deed"));
             }
-            None => run("vissue", &["deed", &issue])?,
-        },
+        }
+        Cmd::Claims { args } => {
+            let mut argv = vec!["claims"];
+            argv.extend(args.iter().map(String::as_str));
+            run("vissue", &argv)?;
+        }
         Cmd::Recall { issue } => run("vissue", &["recall", &issue])?,
         Cmd::Vote {
             issue,

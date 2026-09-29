@@ -4,6 +4,13 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## 0.18.0 (2026-09-30)
 
+- `ljos due` and the prompt hook leave forecasts out. A prediction came
+  up for review, agents graded it, and a forecast withdrawn or replaced
+  first failed with a raw pack error. `ljos graded` on an atom that is
+  no longer current now says so.
+- `ljos deed ISSUE --add A --add B` cites several deeds at once, and
+  `ljos claims` runs `vissue claims` with its flags.
+
 - A subagent's stop hook names only the issue its own conversation holds.
   A hold written from a shell whose runner the process tree had lost
   recorded the multiplexer (herdr) as its conversation, and every subagent

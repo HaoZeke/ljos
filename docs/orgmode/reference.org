@@ -30,7 +30,8 @@
 | =panel ISSUE [--out DIR] [--jev]= | pack, tracker | one brief per persona whose domains the issue speaks to as =DIR/<name>.md=, then the settle line; refused until a playbook is bound. =--jev= asks Jev for every ballot first and casts them only when every seat is sure and all agree; otherwise it writes the briefs |
 | =learn ID --outcome OPTION [--rule record\vert hedge] [--beta B] [--share S]= | tracker, pack | reweigh voters by what turned out right: by default each voter's record of hits and misses as log-odds weights; =hedge= shrinks refuted voters by =B= with =S= recovery |
 | =evidence ACCESSION= / =current ACCESSION= | deed store | intact; still the tip |
-| =deed ID [--add ACCESSION]= | tracker | cite a deed on a node, or list citations |
+| =deed ID [--add ACCESSION]...= | tracker | cite one or more deeds on a node (repeat =--add=), or list citations |
+| =claims [ARGS]= | tracker | who holds what: =vissue claims= with its flags (=--by NAME=, =--json=) |
 | =recall ID= | tracker | the working set |
 | =vote ID [--for OPTION] [--as PERSONA] [--jev]= | tracker | cast, as the seat or as a persona, or read the tally. =--as NAME --jev= asks Jev for the persona's ballot: cast with the option's probability and a forecast at confidence 0.8 or above, noted and left for a subagent under it |
 | =predict ID --expect OPTION\vert JSON [--as PERSONA]= | pack | forecast the others' shares; two or more and =consensus= names the surprisingly popular answer |
