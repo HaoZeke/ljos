@@ -1021,10 +1021,10 @@ impl LjosServer {
                 )?;
                 let who = identity_or_seat(args.as_persona.as_deref())
                     .unwrap_or_else(|| "seat".to_string());
-                ljos_cli::withdraw_prediction(&args.issue, &who).map_err(refused)?;
+                let n = ljos_cli::withdraw_prediction(&args.issue, &who).map_err(refused)?;
                 said.0
                     .text
-                    .push_str(&format!("forecast withdrawn for {who}\n"));
+                    .push_str(&format!("{n} forecast(s) withdrawn for {who}\n"));
                 said.0
                     .text
                     .push_str(&ljos_cli::persist_tracker(&args.issue, "ballot withdrawn"));

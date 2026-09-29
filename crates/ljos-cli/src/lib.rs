@@ -5256,34 +5256,36 @@ pub fn predictions_of(atoms: &[Value], issue: &str) -> Vec<Prediction> {
             }
         }
     }
-    // A withdrawn forecast is a later `null`: the voter forecasts nothing.
-    latest
-        .into_values()
-        .map(|(_, p)| p)
-        .filter(|p| !p.expect.is_null())
-        .collect()
+    latest.into_values().map(|(_, p)| p).collect()
 }
 
-/// Take back `agent`'s forecast on an issue: a `null` prediction, later than
-/// the one it retracts, so the settle reads the voter as forecasting nothing.
+/// Take back `agent`'s forecasts on an issue: each prediction atom it wrote
+/// there is deleted, leaving the pack's tombstone, so the settle reads the
+/// voter as forecasting nothing. Returns how many went.
 ///
 /// # Errors
 ///
-/// The pack refusing the write.
-pub fn withdraw_prediction(issue: &str, agent: &str) -> Result<Value> {
+/// The pack not answering, or refusing a delete.
+pub fn withdraw_prediction(issue: &str, agent: &str) -> Result<usize> {
     let client = pack()?;
     let workspace = client.workspace();
-    let mut atom = atom_body(
-        "prediction",
-        &format!("{agent} withdrew the forecast on {issue}."),
-        &workspace,
-    );
-    atom["issue"] = Value::String(issue.into());
-    atom["agent"] = Value::String(agent.into());
-    atom["expect"] = Value::Null;
-    client
-        .post_atom(&atom)
-        .context("predict: POST /v1/atoms failed")
+    let atoms = client
+        .atoms_of_kind(&workspace, "prediction")
+        .context("predict: GET /v1/atoms failed")?;
+    let mut gone = 0;
+    for atom in atoms {
+        if atom["issue"].as_str() != Some(issue) || atom["agent"].as_str() != Some(agent) {
+            continue;
+        }
+        let Some(id) = atom["id"].as_str() else {
+            continue;
+        };
+        client
+            .delete_atom(&workspace, id, None)
+            .with_context(|| format!("predict: delete {id} failed"))?;
+        gone += 1;
+    }
+    Ok(gone)
 }
 
 /// Forecasts as `ljos-consensus surprising --predictions` takes them.
@@ -13081,21 +13083,6 @@ mod tests {
             "a holder named outright still matches"
         );
         assert!(is_session("herdr") && is_session("tmux: server") && !is_session("acme"));
-    }
-
-    #[test]
-    fn a_withdrawn_forecast_leaves_the_reading() {
-        let atom = |agent: &str, ts: &str, expect: Value| serde_json::json!({"kind": "prediction", "issue": "acme-1", "agent": agent, "ts": ts, "expect": expect});
-        let atoms = vec![
-            atom("brio", "2026-09-29T10:00:00Z", Value::String("ship".into())),
-            atom("brio", "2026-09-29T11:00:00Z", Value::Null),
-            atom("acme", "2026-09-29T10:00:00Z", Value::String("hold".into())),
-        ];
-        let left: Vec<String> = predictions_of(&atoms, "acme-1")
-            .into_iter()
-            .map(|p| p.agent)
-            .collect();
-        assert_eq!(left, vec!["acme"]);
     }
 
     #[test]

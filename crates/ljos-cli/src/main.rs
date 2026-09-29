@@ -598,9 +598,9 @@ fn main() -> Result<()> {
                     as_persona.as_deref(),
                 )?;
                 let who = identity_or_seat(as_persona.as_deref()).unwrap_or_else(whoami_tracker);
-                withdraw_prediction(&issue, &who)
+                let n = withdraw_prediction(&issue, &who)
                     .with_context(|| format!("ballot withdrawn; the forecast for {who} was not"))?;
-                println!("forecast withdrawn for {who}");
+                println!("{n} forecast(s) withdrawn for {who}");
                 print!("{}", ljos_cli::persist_tracker(&issue, "ballot withdrawn"));
             }
             None if jev => {
