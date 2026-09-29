@@ -7351,7 +7351,10 @@ pub fn enclosed_atoms(dir: &Path) -> Result<Vec<Value>> {
 }
 
 /// Kinds that are weighed, not recalled, and so never come up for review.
-const UNREVIEWED_KINDS: &[&str] = &["trust", "persona", "playbook"];
+/// Kinds the review clock never holds and the hook never injects: trust
+/// and persona rows are weighed, playbooks are copied, and a prediction is a
+/// forecast on one ballot, with nothing in it to recall.
+const UNREVIEWED_KINDS: &[&str] = &["trust", "persona", "playbook", "prediction"];
 
 /// Whether an atom is a claim the review clock should hold at all.
 fn reviewable(a: &Value) -> bool {
@@ -7771,7 +7774,19 @@ pub fn graded(id: &str, recalled: bool) -> Result<Value> {
     let client = pack()?;
     client
         .grade(&client.workspace(), id, recalled)
-        .with_context(|| format!("graded: POST /v1/grade failed for {id}"))
+        .map_err(|e| {
+            let said = e.to_string();
+            if said.contains("no current atom") {
+                // The due list was read before a later write closed it.
+                anyhow::anyhow!(
+                    "graded: {id} is no longer current: it was superseded, withdrawn or \
+                     forgotten after the due list was read; nothing to grade, and \
+                     `ljos due` shows what is due now"
+                )
+            } else {
+                anyhow::Error::from(e).context(format!("graded: POST /v1/grade failed for {id}"))
+            }
+        })
 }
 
 /// Now, RFC 3339 UTC to the second, the stamp the pack writes.
@@ -12906,6 +12921,20 @@ mod tests {
             None => unsafe { std::env::remove_var("XDG_RUNTIME_DIR") },
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A forecast is weighed on its ballot and never comes up for review.
+    #[test]
+    fn a_prediction_is_never_due() {
+        let atoms = vec![
+            serde_json::json!({"id": "f", "kind": "prediction", "text": "brio expects ship on acme-1."}),
+            serde_json::json!({"id": "l", "kind": "lesson", "text": "a lesson"}),
+        ];
+        let due: Vec<String> = super::due_of(&atoms, "2026-01-01T00:00:00Z")
+            .iter()
+            .map(|a| a["id"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(due, vec!["l"]);
     }
 
     /// A claim that never entered the clock is due now; a scheduled one is
