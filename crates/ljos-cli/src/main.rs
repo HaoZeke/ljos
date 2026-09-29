@@ -592,12 +592,20 @@ fn main() -> Result<()> {
             withdraw,
         } => match choice {
             None if withdraw => {
-                run_as(
+                let who = identity_or_seat(as_persona.as_deref()).unwrap_or_else(whoami_tracker);
+                // A ballot already taken back still leaves its forecast to
+                // take back, so a second withdraw finishes the first.
+                match ljos_cli::run_captured_as(
                     "vissue",
                     &["vote", &issue, "--withdraw"],
-                    as_persona.as_deref(),
-                )?;
-                let who = identity_or_seat(as_persona.as_deref()).unwrap_or_else(whoami_tracker);
+                    Some(&who),
+                ) {
+                    Ok(said) => print!("{}", said.stdout),
+                    Err(e) if format!("{e:#}").contains("holds no ballot") => {
+                        println!("{issue}: {who} holds no ballot; withdrawing the forecast");
+                    }
+                    Err(e) => return Err(e),
+                }
                 let n = withdraw_prediction(&issue, &who)
                     .with_context(|| format!("ballot withdrawn; the forecast for {who} was not"))?;
                 println!("{n} forecast(s) withdrawn for {who}");
