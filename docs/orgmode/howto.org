@@ -132,6 +132,38 @@ cargo test --release
 What this seat already knows that bears on this ...
 #+end_src
 
+* Let Jev judge the prompt
+
+The prompt hook makes three judgments locally. A cross-encoder picks
+the claims that bear on the prompt. Two phrase lists spot a correction
+and a choice put to the agent. Jev, on OpenRouter's
+Decisions API, answers all three in one call. It is off unless the
+machine turns it on, because the call sends the prompt and up to ten
+candidate claims off the machine.
+
+Put the key in a file only you can read, then write the setting:
+
+#+begin_src console
+$ install -m 600 /dev/null ~/.config/ljos/openrouter.key
+$ echo 'sk-or-...' > ~/.config/ljos/openrouter.key
+$ cat > ~/.config/ljos/jev.toml <<'TOML'
+enabled = true
+key_file = "~/.config/ljos/openrouter.key"
+# model = "typesafe/jev-1.13"
+# budget_ms = 2000
+TOML
+$ ljos doctor | grep jev
+ok	jev	on  typesafe/jev-1.13  2000 ms  $0.0000 this month
+#+end_src
+
+A prompt with ten candidates takes about 900 input tokens. Input costs
+$0.042 per million tokens and output costs nothing, so a prompt costs
+$0.00004. At 2,000 prompts a day, that comes to about $2.30 a month. The spend per
+month is kept in =$XDG_STATE_HOME/ljos/jev-cost.toml= and the doctor
+row prints it. The hook falls back to its local path on any of these: no file,
+=enabled = false=, a missing key, an error, or no answer inside
+=budget_ms=.
+
 * Give an agent the protocol without a runner
 
 #+begin_src console
