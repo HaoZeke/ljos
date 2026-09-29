@@ -2616,10 +2616,65 @@ pub fn subagent_stop_reason(
     })
 }
 
+/// How long a context hook may take before it answers with nothing. The
+/// shortest runner cut-off seen is grok's 15 s on a prompt; this leaves it
+/// room on a loaded host.
+pub const HOOK_DEADLINE_MS: u64 = 8000;
+
+/// Whether an identical call (event, session, text) started in the last 20
+/// seconds. A runner that loads another runner's hook file runs the same
+/// hook twice for one event, and both queue on the pack's one reranker.
+/// The first call makes the marker and answers; the second returns at once.
+pub fn hook_already_running(call: &HookCall) -> bool {
+    let key = work_id(&format!(
+        "{}|{}|{}",
+        call.event,
+        call.session.as_deref().unwrap_or(""),
+        call.cue
+    ));
+    let dir = runtime_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    // About one call in sixteen sweeps markers older than a minute.
+    if key.starts_with('0') {
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for e in entries.flatten() {
+                let old = e.file_name().to_string_lossy().starts_with("hook-once-")
+                    && e.metadata()
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|t| t.elapsed().ok())
+                        .is_some_and(|age| age > std::time::Duration::from_secs(60));
+                if old {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+    }
+    let path = dir.join(format!("hook-once-{key}"));
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+    {
+        Ok(_) => false,
+        Err(_) => {
+            let fresh = std::fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .is_some_and(|age| age < std::time::Duration::from_secs(20));
+            if !fresh {
+                let _ = std::fs::write(&path, "");
+            }
+            fresh
+        }
+    }
+}
+
 /// How long the prompt hook waits for the reranked search. Runners cut a
 /// hook off at 10 to 20 s, and a loaded host has made the rerank alone take
 /// longer than that.
-pub const HOOK_RERANK_BUDGET_MS: u64 = 4000;
+pub const HOOK_RERANK_BUDGET_MS: u64 = 2500;
 
 /// Run `f` with the pack client's request timeout set to `ms`, then put
 /// back whatever it was.
@@ -11131,6 +11186,32 @@ mod tests {
         );
         assert!(touches_seat("use_tool ljos__ljos_sitting"));
         assert!(!touches_seat("cargo build --release"));
+        unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
+    }
+
+    #[test]
+    fn a_twin_hook_call_is_answered_once() {
+        let _g = env_guard();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", dir.path()) };
+        let call = |cue: &str| HookCall {
+            event: "UserPromptSubmit".into(),
+            cue: cue.into(),
+            session: Some("twin".into()),
+            shape: HookShape::CamelCase,
+        };
+        assert!(
+            !hook_already_running(&call("fix the ci")),
+            "the first answers"
+        );
+        assert!(
+            hook_already_running(&call("fix the ci")),
+            "its twin returns"
+        );
+        assert!(
+            !hook_already_running(&call("another prompt")),
+            "another prompt answers"
+        );
         unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
     }
 

@@ -692,6 +692,26 @@ fn main() -> Result<()> {
             let mut input = String::new();
             std::io::stdin().read_to_string(&mut input)?;
             let call = hook_call(&input);
+            // A context event (a prompt, a tool result) says what the seat
+            // knows, and saying nothing is a correct answer; a runner that
+            // cuts the hook off throws the answer away and says it failed.
+            // So those events answer inside a deadline, whatever the pack
+            // does, and a call a second registration of the same hook makes
+            // at the same moment is answered once. A tool gate is exempt
+            // from both: its verdict must not be lost to a clock.
+            if matches!(call.event.as_str(), "UserPromptSubmit" | "PostToolUse") {
+                if ljos_cli::hook_already_running(&call) {
+                    return Ok(());
+                }
+                std::thread::spawn(|| {
+                    std::thread::sleep(std::time::Duration::from_millis(
+                        ljos_cli::HOOK_DEADLINE_MS,
+                    ));
+                    // Taking the lock waits out an answer being written.
+                    let _held = std::io::stdout().lock();
+                    std::process::exit(0);
+                });
+            }
             // A hook answers within the runner's timeout: lookups that walk
             // the whole tracker are skipped from here on.
             // SAFETY: single-threaded here, before anything reads the environment.
