@@ -226,6 +226,11 @@ pub struct VoteArgs {
     /// the seat's own identity.
     #[serde(rename = "as")]
     pub as_persona: Option<String>,
+    /// With `as` and no `choice`: ask Jev for the persona's ballot. A sure
+    /// answer is cast with its confidence and forecast; an unsure one is
+    /// not cast, and the reply says to start a subagent from its brief.
+    #[serde(default)]
+    pub jev: bool,
 }
 
 /// A persona and the issue it will read.
@@ -1003,6 +1008,24 @@ impl LjosServer {
                     .text
                     .push_str(&ljos_cli::persist_tracker(&args.issue, "ballot cast"));
                 Ok(said)
+            }
+            None if args.jev => {
+                let Some(name) = args.as_persona.as_deref() else {
+                    return Err(refused(anyhow::anyhow!("jev: a Jev ballot is cast as a persona; pass as")));
+                };
+                let text = match ljos_cli::jev_vote(name, &args.issue).map_err(refused)? {
+                    ljos_cli::JevVote::Cast(b) => format!(
+                        "{name}: Jev cast {} at confidence {:.2}\n",
+                        b.choice, b.confidence
+                    ),
+                    ljos_cli::JevVote::Escalated(b) => format!(
+                        "{name}: Jev leaned {} at confidence {:.2}, under the {:.2} cut; not cast. \
+                         Start a subagent from ljos_brief {name} {}\n",
+                        b.choice, b.confidence, b.escalate_below, args.issue
+                    ),
+                };
+                let text = text + &ljos_cli::persist_tracker(&args.issue, "Jev ballot");
+                Ok(Json(Said { text, aside: None }))
             }
             None => habitat("vissue", &["vote", &args.issue]),
         }

@@ -4,6 +4,15 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
+- `ljos vote ISSUE --as NAME --jev` and `ljos panel ISSUE --jev` ask Jev
+  for persona ballots. A sure ballot is cast with the option's
+  probability as its confidence and Jev's forecast as its prediction.
+  An unsure one (under `escalate_below`, 0.8) is left for a subagent. A
+  panel casts only when every seat is sure and all agree, since personas
+  from one model are correlated. `ljos_vote` takes `jev` over MCP.
+  Every Jev answer is logged to `jev-log.jsonl`. With Jev, the hook
+  ranks what it judged by Jev's probability.
+
 - The prompt hook can ask Jev, TypeSafe's decision model, which
   candidate claims bear on the prompt and whether the prompt corrects
   the agent or puts a choice. One call answers all three and replaces

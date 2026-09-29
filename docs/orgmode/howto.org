@@ -383,6 +383,38 @@ name (=link_weights_by=), leaving the seat's weights as they were. Two
 personas that read the same island differently end up with different
 islands over the same claims.
 
+* Cast persona ballots through Jev
+
+With Jev on, a persona's ballot can come from Jev instead of a subagent.
+The issue needs an =Options: A, B= line.
+
+#+begin_src console
+$ ljos vote ljos-abcd --as security-reviewer --jev
+security-reviewer: Jev cast age at confidence 0.97
+$ ljos panel ljos-abcd --jev
+3 personas on ljos-abcd through Jev: all sure, all age; cast
+#+end_src
+
+Jev reads the persona's brief and answers two choice questions: the
+persona's vote, and what the rest of the panel will pick. A cast ballot
+records the chosen option's probability as its confidence and the
+forecast as its prediction, so the settle and the surprisingly popular
+reading get both. A note on the issue says the ballot came from Jev.
+
+Jev's confidence measures how spread out its probabilities are. Under
+=escalate_below= (0.8), =vote --jev= does not cast. It notes Jev's lean
+and names the brief to start a subagent from.
+
+A panel casts only when every seated persona is sure and all agree.
+Personas answered by one model are correlated voters, so their agreement
+settles only a question it could not change. A split or unsure panel
+casts nothing and writes a brief per seat for subagents. The metered
+model then spends only on the contested questions. A ballot costs about
+2,000 input tokens, or $0.00008.
+
+Every Jev answer goes to =$XDG_STATE_HOME/ljos/jev-log.jsonl=. =ljos
+learn= scores a cast ballot's confidence as it does any voter's.
+
 * Move the trust rows without an outcome
 
 #+begin_src console

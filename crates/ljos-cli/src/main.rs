@@ -148,6 +148,11 @@ enum Cmd {
         /// Cast as this persona instead of the seat's identity.
         #[arg(long = "as")]
         as_persona: Option<String>,
+        /// Ask Jev for the persona's ballot (needs `--as`, not `--for`):
+        /// cast with its confidence and forecast when it is sure, handed to
+        /// a subagent when it is not.
+        #[arg(long, requires = "as_persona", conflicts_with = "choice")]
+        jev: bool,
     },
     /// The brief a subagent playing a persona starts from: view, domains, what the seat knows there, the work.
     Brief {
@@ -171,6 +176,10 @@ enum Cmd {
         /// Where the briefs go, one `<persona>.md` each.
         #[arg(long, default_value = "panel")]
         out: PathBuf,
+        /// Ask Jev for every ballot first; only the personas it is unsure
+        /// for get a brief.
+        #[arg(long)]
+        jev: bool,
     },
     /// A voter with a view: NAME holds its ballot by ANCHOR in [0, 1] (0 never moves).
     Persona {
@@ -574,7 +583,25 @@ fn main() -> Result<()> {
             used,
             expect,
             as_persona,
+            jev,
         } => match choice {
+            None if jev => {
+                let name = as_persona.as_deref().unwrap_or_default();
+                match ljos_cli::jev_vote(name, &issue)? {
+                    ljos_cli::JevVote::Cast(b) => {
+                        println!("{name}: Jev cast {} at confidence {:.2}", b.choice, b.confidence);
+                        print!("{}", ljos_cli::persist_tracker(&issue, "ballot cast"));
+                    }
+                    ljos_cli::JevVote::Escalated(b) => {
+                        println!(
+                            "{name}: Jev leaned {} at confidence {:.2}, under the {:.2} cut; not cast. \
+                             Start a subagent from `ljos brief {name} {issue}`",
+                            b.choice, b.confidence, b.escalate_below
+                        );
+                        print!("{}", ljos_cli::persist_tracker(&issue, "escalated a ballot"));
+                    }
+                }
+            }
             Some(c) => {
                 let used = used.as_deref().unwrap_or("");
                 if used.is_empty() {
@@ -610,7 +637,14 @@ fn main() -> Result<()> {
         },
         Cmd::Brief { name, issue } => print!("{}", brief(&name, &issue)?),
         Cmd::Timeline { issue, limit } => print!("{}", timeline(&issue, limit)?),
-        Cmd::Panel { issue, out } => print!("{}", panel(&issue, &out)?),
+        Cmd::Panel { issue, out, jev } => {
+            if jev {
+                print!("{}", ljos_cli::panel_jev(&issue, &out)?);
+                print!("{}", ljos_cli::persist_tracker(&issue, "panel through Jev"));
+            } else {
+                print!("{}", panel(&issue, &out)?);
+            }
+        }
         Cmd::Persona {
             name,
             anchor,

@@ -63,6 +63,10 @@ pub struct Config {
     /// choice.
     #[serde(default = "default_cut")]
     pub cue_at: f64,
+    /// A persona ballot whose confidence is under this goes to a subagent
+    /// instead of being cast.
+    #[serde(default = "default_escalate")]
+    pub escalate_below: f64,
 }
 
 fn default_model() -> String {
@@ -82,6 +86,9 @@ fn default_min_words() -> usize {
 }
 fn default_min_candidates() -> usize {
     2
+}
+fn default_escalate() -> f64 {
+    0.8
 }
 fn default_cut() -> f64 {
     0.5
@@ -298,11 +305,9 @@ pub fn parse(body: &Value, candidates: usize) -> Option<Judgment> {
     })
 }
 
-/// Ask Jev about one prompt, inside the configured budget.
-#[must_use]
-pub fn judge(prompt: &str, candidates: &[&str]) -> Option<Judgment> {
-    let (cfg, key) = config()?;
-    let body = request(&cfg.model, prompt, candidates);
+/// Send one request inside the configured budget, record its cost and
+/// log its answers; the answers object, or `None` on any failure.
+fn post(cfg: &Config, key: &str, body: Value, kind: &str, about: Value) -> Option<Value> {
     let reply: Value = ureq::post(&cfg.endpoint)
         .timeout(Duration::from_millis(cfg.budget_ms))
         .set("Authorization", &format!("Bearer {key}"))
@@ -311,23 +316,151 @@ pub fn judge(prompt: &str, candidates: &[&str]) -> Option<Judgment> {
         .ok()?
         .into_json()
         .ok()?;
+    let answers = reply.get("answers")?.clone();
+    let cost = cost_of(&reply, cfg.usd_per_mtok_in);
+    record_cost(cost);
+    log(&serde_json::json!({
+        "ts": crate::now_utc(),
+        "kind": kind,
+        "model": cfg.model,
+        "about": about,
+        "answers": answers,
+        "cost": cost,
+    }));
+    Some(reply)
+}
+
+/// Ask Jev about one prompt, inside the configured budget.
+#[must_use]
+pub fn judge(prompt: &str, candidates: &[&str]) -> Option<Judgment> {
+    let (cfg, key) = config()?;
+    let body = request(&cfg.model, prompt, candidates);
+    let reply = post(&cfg, &key, body, "hook", Value::Null)?;
     let mut judged = parse(&reply, candidates.len())?;
     judged.cost = cost_of(&reply, cfg.usd_per_mtok_in);
     judged.bears_at = cfg.bears_at;
     judged.cue_at = cfg.cue_at;
-    record_cost(judged.cost);
     Some(judged)
+}
+
+/// A persona's ballot as Jev answered it: the choice with its confidence
+/// and the probability of every option, and its forecast of the share each
+/// option gets from the rest of the panel.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Ballot {
+    pub choice: String,
+    pub confidence: f64,
+    pub probabilities: BTreeMap<String, f64>,
+    pub forecast: BTreeMap<String, f64>,
+    /// The machine's cut under which the ballot goes to a subagent.
+    pub escalate_below: f64,
+}
+
+impl Ballot {
+    /// Whether Jev is too unsure for its answer to stand as the ballot.
+    #[must_use]
+    pub fn escalates(&self) -> bool {
+        self.confidence < self.escalate_below
+    }
+}
+
+/// The ballot request: the persona's brief as state, one `choice` for its
+/// own vote and one for what the rest of the panel will pick.
+#[must_use]
+pub fn ballot_request(model: &str, brief: &str, options: &[String]) -> Value {
+    let criteria = |verb: &str| -> Value {
+        options
+            .iter()
+            .map(|o| (o.clone(), Value::String(format!("{verb} {o}"))))
+            .collect::<serde_json::Map<_, _>>()
+            .into()
+    };
+    serde_json::json!({
+        "model": model,
+        "state": brief,
+        "questions": {
+            "ballot": {
+                "type": "choice",
+                "instructions": "You are the persona the state describes. Which option do you vote for, from your own view and what you know?",
+                "criteria": criteria("vote for"),
+            },
+            "forecast": {
+                "type": "choice",
+                "instructions": "Which option will most of the other reviewers on this panel vote for?",
+                "criteria": criteria("most others pick"),
+            },
+        }
+    })
+}
+
+/// Read a ballot answer; `None` when either question went unanswered or
+/// the choice is not one of the options.
+#[must_use]
+pub fn parse_ballot(body: &Value, options: &[String]) -> Option<Ballot> {
+    let answers = body.get("answers")?;
+    let probs = |key: &str| -> Option<BTreeMap<String, f64>> {
+        let map = answers.get(key)?.get("probabilities")?.as_object()?;
+        Some(
+            map.iter()
+                .filter_map(|(k, v)| Some((k.clone(), v.as_f64()?)))
+                .collect(),
+        )
+    };
+    let ballot = answers.get("ballot")?;
+    let choice = ballot.get("choice")?.as_str()?.to_string();
+    if !options.contains(&choice) {
+        return None;
+    }
+    Some(Ballot {
+        confidence: ballot.get("confidence")?.as_f64()?,
+        probabilities: probs("ballot")?,
+        forecast: probs("forecast")?,
+        choice,
+        escalate_below: 0.8,
+    })
+}
+
+/// Ask Jev for a persona's ballot on an issue.
+#[must_use]
+pub fn ballot(persona: &str, issue: &str, brief: &str, options: &[String]) -> Option<Ballot> {
+    let (cfg, key) = config()?;
+    let body = ballot_request(&cfg.model, brief, options);
+    let about = serde_json::json!({"issue": issue, "persona": persona, "options": options});
+    let reply = post(&cfg, &key, body, "ballot", about)?;
+    let mut b = parse_ballot(&reply, options)?;
+    b.escalate_below = cfg.escalate_below;
+    Some(b)
+}
+
+fn state_dir() -> Option<PathBuf> {
+    Some(
+        std::env::var_os("XDG_STATE_HOME")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))?
+            .join("ljos"),
+    )
+}
+
+/// Every answer Jev gave, one JSON line each in the state directory, so
+/// its probabilities can be scored once the outcomes are known.
+fn log(entry: &Value) {
+    use std::io::Write;
+    let Some(dir) = state_dir() else { return };
+    let _ = std::fs::create_dir_all(&dir);
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("jev-log.jsonl"))
+    {
+        let _ = writeln!(f, "{entry}");
+    }
 }
 
 /// Add a call's cost to this month's running total in the state directory,
 /// so `ljos doctor` can say what Jev has cost.
 fn record_cost(cost: f64) {
-    let dir = std::env::var_os("XDG_STATE_HOME")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
-        .unwrap_or_else(|| PathBuf::from(".local/state"))
-        .join("ljos");
+    let Some(dir) = state_dir() else { return };
     let _ = std::fs::create_dir_all(&dir);
     let month = crate::now_utc().chars().take(7).collect::<String>();
     let path = dir.join("jev-cost.toml");
@@ -343,11 +476,7 @@ fn record_cost(cost: f64) {
 }
 
 fn month_totals() -> Option<BTreeMap<String, f64>> {
-    let dir = std::env::var_os("XDG_STATE_HOME")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))?
-        .join("ljos");
+    let dir = state_dir()?;
     let text = std::fs::read_to_string(dir.join("jev-cost.toml")).ok()?;
     toml::from_str(&text).ok()
 }
@@ -469,5 +598,28 @@ mod tests {
         assert_eq!(key_from("apikey: sk-or-v1-abc\nurl: x\n").as_deref(), Some("sk-or-v1-abc"));
         assert_eq!(key_from("apikey=sk-or-v1-abc").as_deref(), Some("sk-or-v1-abc"));
         assert_eq!(key_from("\n"), None);
+    }
+
+    #[test]
+    fn a_ballot_carries_its_confidence_and_forecast_and_escalates_under_the_cut() {
+        let options = vec!["age".to_string(), "gpg".to_string()];
+        let body = ballot_request("jev-1.13.0", "You are brio.", &options);
+        assert_eq!(body["questions"]["ballot"]["type"], "choice");
+        assert_eq!(body["questions"]["forecast"]["criteria"]["gpg"], "most others pick gpg");
+        let reply = serde_json::json!({"answers": {
+            "ballot": {"type": "choice", "choice": "age", "confidence": 0.97,
+                       "probabilities": {"age": 0.98, "gpg": 0.02}},
+            "forecast": {"type": "choice", "choice": "age", "confidence": 0.95,
+                         "probabilities": {"age": 0.97, "gpg": 0.03}}}});
+        let b = parse_ballot(&reply, &options).unwrap();
+        assert_eq!(b.choice, "age");
+        assert!(!b.escalates(), "0.97 stands at the 0.8 cut");
+        assert!((b.forecast["gpg"] - 0.03).abs() < 1e-9);
+        let unsure = Ballot { confidence: 0.6, ..b.clone() };
+        assert!(unsure.escalates(), "0.6 goes to a subagent");
+        let off = serde_json::json!({"answers": {
+            "ballot": {"choice": "rsa", "confidence": 0.9, "probabilities": {}},
+            "forecast": {"choice": "age", "confidence": 0.9, "probabilities": {}}}});
+        assert!(parse_ballot(&off, &options).is_none(), "a choice off the list is refused");
     }
 }
