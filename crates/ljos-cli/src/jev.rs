@@ -55,6 +55,14 @@ pub struct Config {
     /// not carry its cost. Output is not charged.
     #[serde(default = "default_price_in")]
     pub usd_per_mtok_in: f64,
+    /// The probability at which a candidate counts as bearing on the
+    /// prompt; higher lets fewer off-topic claims through.
+    #[serde(default = "default_cut")]
+    pub bears_at: f64,
+    /// The probability at which the prompt counts as a correction or a
+    /// choice.
+    #[serde(default = "default_cut")]
+    pub cue_at: f64,
 }
 
 fn default_model() -> String {
@@ -74,6 +82,9 @@ fn default_min_words() -> usize {
 }
 fn default_min_candidates() -> usize {
     2
+}
+fn default_cut() -> f64 {
+    0.5
 }
 fn default_price_in() -> f64 {
     0.042
@@ -204,8 +215,20 @@ pub struct Judgment {
     pub correction: f64,
     /// Probability the prompt puts a choice between options to the agent.
     pub choice: f64,
-    /// What the call cost, in US dollars, as the API reported it.
+    /// What the call cost, in US dollars.
     pub cost: f64,
+    /// The machine's cut for `bears`.
+    pub bears_at: f64,
+    /// The machine's cut for `correction` and `choice`.
+    pub cue_at: f64,
+}
+
+impl Judgment {
+    /// Whether candidate `i` bears on the prompt at the machine's cut.
+    #[must_use]
+    pub fn bears(&self, i: usize) -> bool {
+        self.bears.get(i).is_some_and(|p| *p >= self.bears_at)
+    }
 }
 
 /// The request body: the prompt and numbered candidates as state, one
@@ -270,6 +293,8 @@ pub fn parse(body: &Value, candidates: usize) -> Option<Judgment> {
         correction: noul("correction")?,
         choice: noul("choice")?,
         cost: 0.0,
+        bears_at: 0.5,
+        cue_at: 0.5,
     })
 }
 
@@ -288,6 +313,8 @@ pub fn judge(prompt: &str, candidates: &[&str]) -> Option<Judgment> {
         .ok()?;
     let mut judged = parse(&reply, candidates.len())?;
     judged.cost = cost_of(&reply, cfg.usd_per_mtok_in);
+    judged.bears_at = cfg.bears_at;
+    judged.cue_at = cfg.cue_at;
     record_cost(judged.cost);
     Some(judged)
 }
@@ -398,6 +425,9 @@ mod tests {
         });
         let j = parse(&full, 2).unwrap();
         assert_eq!(j.bears, vec![0.9, 0.1]);
+        assert!(j.bears(0) && !j.bears(1));
+        let strict = Judgment { bears_at: 0.95, ..j.clone() };
+        assert!(!strict.bears(0), "a higher cut drops the 0.9");
         assert!((j.choice - 0.7).abs() < 1e-9);
         assert!((cost_of(&full, 0.042) - 0.0000378).abs() < 1e-12, "the API's figure");
         let direct = serde_json::json!({"usage": {"input_tokens": 1000, "output_tokens": 60}});

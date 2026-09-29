@@ -177,6 +177,11 @@ figure when OpenRouter sends one, in =$XDG_STATE_HOME/ljos/jev-cost.toml=.
 For OpenRouter, set =endpoint = "https://openrouter.ai/api/alpha/decisions"=
 and =model = "typesafe/jev-1.13"=.
 
+Jev answers each question with a probability. =bears_at= (0.5) is the
+one at which a claim goes in, and =cue_at= (0.5) the one at which a
+prompt counts as a correction or a choice. Raise =bears_at= to 0.7 when
+off-topic claims come through.
+
 The hook falls back to its local path on any of these: no file,
 =enabled = false=, no key, an error, or no answer inside =budget_ms=
 (2000).

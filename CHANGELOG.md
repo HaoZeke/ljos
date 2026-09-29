@@ -13,7 +13,8 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
   words, prompts with fewer than two candidates, and every prompt once
   the month's spend reaches `monthly_usd`. With Jev on, the local
   cross-encoder is never loaded. `ljos doctor` prints a `jev` row with
-  the month's calls and spend.
+  the month's calls and spend. `bears_at` and `cue_at` (0.5) set the
+  probability each judgment needs.
 
 - A prompt or tool-result hook answers inside 8 s, with no context rather
   than being cut off by its runner; an identical call started in the last

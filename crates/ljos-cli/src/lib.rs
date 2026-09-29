@@ -2303,7 +2303,9 @@ pub fn hook_note(call: &HookCall, limit: usize) -> (String, Vec<String>) {
     let judged = judged_prompt(call, cue);
     let (correction, choice) = judged
         .as_ref()
-        .map_or((None, None), |(_, j)| (Some(j.correction >= 0.5), Some(j.choice >= 0.5)));
+        .map_or((None, None), |(_, j)| {
+            (Some(j.correction >= j.cue_at), Some(j.choice >= j.cue_at))
+        });
     for (key, extra) in [
         correction_nudge_as(call, correction),
         decision_nudge_as(call, choice),
@@ -2329,9 +2331,9 @@ pub fn hook_note(call: &HookCall, limit: usize) -> (String, Vec<String>) {
         // is what goes in, with no score floor or word test on top.
         candidates
             .iter()
-            .zip(&j.bears)
-            .filter(|(_, p)| **p >= 0.5)
-            .map(|(h, _)| h)
+            .enumerate()
+            .filter(|(i, _)| j.bears(*i))
+            .map(|(_, h)| h)
             .filter(|h| h.id.as_ref().is_none_or(|id| !seen.contains(id)))
             .collect()
     } else {
