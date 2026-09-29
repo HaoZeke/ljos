@@ -11,7 +11,8 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
   panel casts only when every seat is sure and all agree, since personas
   from one model are correlated. `ljos_vote` takes `jev` over MCP.
   Every Jev answer is logged to `jev-log.jsonl`. With Jev, the hook
-  ranks what it judged by Jev's probability.
+  ranks what it judged by Jev's probability. An identical Jev request
+  within `cache_days` (7) is answered from a local cache at no cost.
 
 - The prompt hook can ask Jev, TypeSafe's decision model, which
   candidate claims bear on the prompt and whether the prompt corrects

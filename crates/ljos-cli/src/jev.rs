@@ -67,6 +67,10 @@ pub struct Config {
     /// instead of being cast.
     #[serde(default = "default_escalate")]
     pub escalate_below: f64,
+    /// Days an answer is kept and given again for an identical request, at
+    /// no cost; 0 turns the cache off. Jev keeps no cache of its own.
+    #[serde(default = "default_cache_days")]
+    pub cache_days: u64,
 }
 
 fn default_model() -> String {
@@ -86,6 +90,9 @@ fn default_min_words() -> usize {
 }
 fn default_min_candidates() -> usize {
     2
+}
+fn default_cache_days() -> u64 {
+    7
 }
 fn default_escalate() -> f64 {
     0.8
@@ -308,6 +315,11 @@ pub fn parse(body: &Value, candidates: usize) -> Option<Judgment> {
 /// Send one request inside the configured budget, record its cost and
 /// log its answers; the answers object, or `None` on any failure.
 fn post(cfg: &Config, key: &str, body: Value, kind: &str, about: Value) -> Option<Value> {
+    let request = format!("{}\n{body}", cfg.endpoint);
+    if let Some(reply) = cached(&request, cfg.cache_days) {
+        count("cached");
+        return Some(reply);
+    }
     let reply: Value = ureq::post(&cfg.endpoint)
         .timeout(Duration::from_millis(cfg.budget_ms))
         .set("Authorization", &format!("Bearer {key}"))
@@ -319,6 +331,9 @@ fn post(cfg: &Config, key: &str, body: Value, kind: &str, about: Value) -> Optio
     let answers = reply.get("answers")?.clone();
     let cost = cost_of(&reply, cfg.usd_per_mtok_in);
     record_cost(cost);
+    if cfg.cache_days > 0 {
+        keep(&request, &reply);
+    }
     log(&serde_json::json!({
         "ts": crate::now_utc(),
         "kind": kind,
@@ -432,6 +447,66 @@ pub fn ballot(persona: &str, issue: &str, brief: &str, options: &[String]) -> Op
     Some(b)
 }
 
+/// `$XDG_CACHE_HOME/ljos/jev`, one file per request.
+fn cache_dir() -> Option<PathBuf> {
+    Some(
+        std::env::var_os("XDG_CACHE_HOME")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))?
+            .join("ljos")
+            .join("jev"),
+    )
+}
+
+/// The file an identical request lands in. The hash only names the file;
+/// the file holds the whole request, and a hit must match it exactly.
+fn cache_file(request: &str) -> Option<PathBuf> {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    request.hash(&mut h);
+    Some(cache_dir()?.join(format!("{:016x}.json", h.finish())))
+}
+
+/// The answer to an identical request made within `days`.
+fn cached(request: &str, days: u64) -> Option<Value> {
+    if days == 0 {
+        return None;
+    }
+    let path = cache_file(request)?;
+    let age = std::fs::metadata(&path).ok()?.modified().ok()?.elapsed().ok()?;
+    if age > Duration::from_secs(days * 86_400) {
+        let _ = std::fs::remove_file(&path);
+        return None;
+    }
+    let entry: Value = serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?;
+    (entry["request"].as_str() == Some(request)).then(|| entry["reply"].clone())
+}
+
+fn keep(request: &str, reply: &Value) {
+    let Some(path) = cache_file(request) else { return };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let entry = serde_json::json!({"request": request, "reply": reply});
+    let _ = std::fs::write(path, entry.to_string());
+}
+
+/// Add one to this month's tally named `what` (`calls`, `cached`).
+fn count(what: &str) {
+    let Some(dir) = state_dir() else { return };
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("jev-cost.toml");
+    let mut totals: BTreeMap<String, f64> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| toml::from_str(&t).ok())
+        .unwrap_or_default();
+    *totals.entry(format!("{}-{what}", this_month())).or_default() += 1.0;
+    if let Ok(text) = toml::to_string(&totals) {
+        let _ = std::fs::write(path, text);
+    }
+}
+
 fn state_dir() -> Option<PathBuf> {
     Some(
         std::env::var_os("XDG_STATE_HOME")
@@ -491,12 +566,19 @@ pub fn month_cost() -> Option<f64> {
     month_totals()?.get(&this_month()).copied()
 }
 
+/// This month's tally named `what`: `calls` made, `cached` answered from
+/// the cache.
+#[must_use]
+pub fn month_count(what: &str) -> u64 {
+    month_totals()
+        .and_then(|t| t.get(&format!("{}-{what}", this_month())).copied())
+        .unwrap_or(0.0) as u64
+}
+
 /// How many calls this month made.
 #[must_use]
 pub fn month_calls() -> u64 {
-    month_totals()
-        .and_then(|t| t.get(&format!("{}-calls", this_month())).copied())
-        .unwrap_or(0.0) as u64
+    month_count("calls")
 }
 
 /// The `jev` row in `ljos doctor`, only on a machine with a Jev file: off,
@@ -511,9 +593,10 @@ pub fn doctor_row() -> Option<crate::Habitat> {
         Ok(cfg) => {
             let spent = month_cost().unwrap_or(0.0);
             let head = format!(
-                "{}  {} calls  ${spent:.4} of ${:.2} this month",
+                "{}  {} calls, {} cached  ${spent:.4} of ${:.2} this month",
                 cfg.model,
                 month_calls(),
+                month_count("cached"),
                 cfg.monthly_usd
             );
             if spent >= cfg.monthly_usd {
@@ -621,5 +704,19 @@ mod tests {
             "ballot": {"choice": "rsa", "confidence": 0.9, "probabilities": {}},
             "forecast": {"choice": "age", "confidence": 0.9, "probabilities": {}}}});
         assert!(parse_ballot(&off, &options).is_none(), "a choice off the list is refused");
+    }
+
+    #[test]
+    fn an_identical_request_is_answered_from_the_cache_and_only_that_one() {
+        let dir = tempfile::tempdir().unwrap();
+        // Safety: the test sets and clears this for itself.
+        unsafe { std::env::set_var("XDG_CACHE_HOME", dir.path()) };
+        let reply = serde_json::json!({"answers": {"x": {"noul": 0.9}}});
+        assert!(cached("req-a", 7).is_none(), "nothing kept yet");
+        keep("req-a", &reply);
+        assert_eq!(cached("req-a", 7), Some(reply));
+        assert!(cached("req-b", 7).is_none(), "another request misses");
+        assert!(cached("req-a", 0).is_none(), "0 days is off");
+        unsafe { std::env::remove_var("XDG_CACHE_HOME") };
     }
 }

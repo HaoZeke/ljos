@@ -182,6 +182,12 @@ one at which a claim goes in, and =cue_at= (0.5) the one at which a
 prompt counts as a correction or a choice. Raise =bears_at= to 0.7 when
 off-topic claims come through.
 
+Jev keeps no cache of its own, so ljos keeps one. An identical request
+within =cache_days= (7) is answered from =$XDG_CACHE_HOME/ljos/jev= at no
+cost, and the doctor row counts those answers as cached. A panel asked
+twice, a retried ballot and a repeated prompt with the same claims all
+hit it. =cache_days = 0= turns it off.
+
 The hook falls back to its local path on any of these: no file,
 =enabled = false=, no key, an error, or no answer inside =budget_ms=
 (2000).
