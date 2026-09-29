@@ -4843,20 +4843,57 @@ fn is_scope_marker(word: &str) -> bool {
     word.to_lowercase().starts_with("sync:")
 }
 
+/// Persona domains that are also everyday words of an issue title. A match
+/// on one of these alone gives way to a match on a specific word.
+const GENERIC_DOMAINS: &[&str] = &[
+    "build",
+    "test",
+    "tests",
+    "fix",
+    "docs",
+    "release",
+    "review",
+    "api",
+    "ci",
+    "performance",
+    "design",
+    "data",
+    "web",
+    "memory",
+    "search",
+    "sharing",
+    "course",
+    "training",
+];
+
 pub fn personas_speaking_to(personas: &[Persona], words: &[String]) -> Vec<Persona> {
     let words: Vec<String> = words
         .iter()
         .map(|w| w.to_lowercase())
         .filter(|w| !is_scope_marker(w))
         .collect();
+    let matched = |p: &Persona, generic: bool| {
+        p.entities.iter().any(|d| {
+            let d = d.to_lowercase();
+            !is_scope_marker(&d)
+                && GENERIC_DOMAINS.contains(&d.as_str()) == generic
+                && words.iter().any(|w| w == &d)
+        })
+    };
+    // A domain that is also an everyday word of a title ("build", "test")
+    // seats its persona only when no persona speaks to a specific word: a
+    // hook question that says "build next" is not a build question.
+    let specific: Vec<Persona> = personas
+        .iter()
+        .filter(|p| matched(p, false))
+        .cloned()
+        .collect();
+    if !specific.is_empty() {
+        return specific;
+    }
     let speaking: Vec<Persona> = personas
         .iter()
-        .filter(|p| {
-            p.entities.iter().any(|d| {
-                let d = d.to_lowercase();
-                !is_scope_marker(&d) && words.iter().any(|w| w == &d)
-            })
-        })
+        .filter(|p| matched(p, true))
         .cloned()
         .collect();
     if !speaking.is_empty() {
@@ -13114,6 +13151,37 @@ mod tests {
             "a holder named outright still matches"
         );
         assert!(is_session("herdr") && is_session("tmux: server") && !is_session("acme"));
+    }
+
+    #[test]
+    fn a_generic_domain_gives_way_to_a_specific_one() {
+        let persona = |name: &str, about: &[&str]| Persona {
+            name: name.into(),
+            anchor: 0.5,
+            view: String::new(),
+            entities: about.iter().map(|s| (*s).to_string()).collect(),
+        };
+        let pack = vec![
+            persona("agentuser", &["seat", "hook"]),
+            persona("build-meson", &["eon", "build"]),
+        ];
+        let words = |t: &str| topic_words(t);
+        let seated = |t: &str| -> Vec<String> {
+            personas_speaking_to(&pack, &words(t))
+                .into_iter()
+                .map(|p| p.name)
+                .collect()
+        };
+        assert_eq!(
+            seated("Which Jev hook integration to build next"),
+            vec!["agentuser"]
+        );
+        assert_eq!(seated("Meson build breaks on Windows"), vec!["build-meson"]);
+        assert_eq!(
+            seated("eOn build flags"),
+            vec!["build-meson"],
+            "eon is specific"
+        );
     }
 
     #[test]

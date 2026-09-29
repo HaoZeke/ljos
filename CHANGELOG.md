@@ -4,6 +4,11 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## 0.18.0 (2026-09-30)
 
+- A panel seats a persona matched only through an everyday title word
+  ("build", "test", "docs") when no persona speaks to a specific one. A
+  hook question titled "which integration to build next" had seated the
+  eOn build reviewers beside the seat's own.
+
 - `ljos due` and the prompt hook leave forecasts out. A prediction came
   up for review, agents graded it, and a forecast withdrawn or replaced
   first failed with a raw pack error. `ljos graded` on an atom that is
