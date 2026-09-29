@@ -11,6 +11,7 @@ use packset_client::{Hit, PacksetClient};
 use serde_json::Value;
 
 pub mod hud;
+pub mod jev;
 pub mod sync;
 
 /// Working-core files this seat will print. Nothing else, and never write.
@@ -2296,9 +2297,19 @@ pub fn hook_note(call: &HookCall, limit: usize) -> (String, Vec<String>) {
     if let Some(key) = due_key {
         pending.push(key);
     }
-    for (key, extra) in [correction_nudge(call), decision_nudge(call)]
-        .into_iter()
-        .flatten()
+    // With Jev on for this machine, one call judges which candidates bear on
+    // the prompt and whether it corrects or puts a choice. Without it, or
+    // when it does not answer in time, the local path below runs.
+    let judged = judged_prompt(call, cue);
+    let (correction, choice) = judged
+        .as_ref()
+        .map_or((None, None), |(_, j)| (Some(j.correction >= 0.5), Some(j.choice >= 0.5)));
+    for (key, extra) in [
+        correction_nudge_as(call, correction),
+        decision_nudge_as(call, choice),
+    ]
+    .into_iter()
+    .flatten()
     {
         pending.push(key);
         if !nudge.is_empty() {
@@ -2311,24 +2322,38 @@ pub fn hook_note(call: &HookCall, limit: usize) -> (String, Vec<String>) {
     // an episode.
     // The rerank gets a budget inside the runner's hook timeout; past it the
     // lexical search answers, which takes a fraction of a second.
-    let reranked = with_pack_timeout(HOOK_RERANK_BUDGET_MS, || packset_search_opts(cue, 10, true));
-    let Ok(hits) = reranked.or_else(|_| packset_search(cue)) else {
-        return (nudge, pending);
-    };
-    let top = hits.iter().map(|h| h.score).fold(0.0_f64, f64::max);
-    if top <= 0.0 {
-        return (nudge, pending);
-    }
     let seen = seen_ids(call.session.as_deref());
-    let mut rows: Vec<&Hit> = hits
-        .iter()
-        .filter(|h| !UNREVIEWED_KINDS.contains(&h.kind.as_str()))
-        .filter(|h| h.score >= top * HOOK_SCORE_FLOOR)
-        .filter(|h| agreed(h))
-        .filter(|h| names_the_cue(&h.text, cue))
-        .filter(|h| is_refresher(h))
-        .filter(|h| h.id.as_ref().is_none_or(|id| !seen.contains(id)))
-        .collect();
+    let hits: Vec<Hit>;
+    let mut rows: Vec<&Hit> = if let Some((candidates, j)) = &judged {
+        // Jev read the prompt and each claim together; what it says bears
+        // is what goes in, with no score floor or word test on top.
+        candidates
+            .iter()
+            .zip(&j.bears)
+            .filter(|(_, p)| **p >= 0.5)
+            .map(|(h, _)| h)
+            .filter(|h| h.id.as_ref().is_none_or(|id| !seen.contains(id)))
+            .collect()
+    } else {
+        let reranked =
+            with_pack_timeout(HOOK_RERANK_BUDGET_MS, || packset_search_opts(cue, 10, true));
+        let Ok(found) = reranked.or_else(|_| packset_search(cue)) else {
+            return (nudge, pending);
+        };
+        hits = found;
+        let top = hits.iter().map(|h| h.score).fold(0.0_f64, f64::max);
+        if top <= 0.0 {
+            return (nudge, pending);
+        }
+        hits.iter()
+            .filter(|h| !UNREVIEWED_KINDS.contains(&h.kind.as_str()))
+            .filter(|h| h.score >= top * HOOK_SCORE_FLOOR)
+            .filter(|h| agreed(h))
+            .filter(|h| names_the_cue(&h.text, cue))
+            .filter(|h| is_refresher(h))
+            .filter(|h| h.id.as_ref().is_none_or(|id| !seen.contains(id)))
+            .collect()
+    };
     rows.sort_by(|a, b| {
         let pa = a.kind == "preference";
         let pb = b.kind == "preference";
@@ -2361,6 +2386,26 @@ pub fn hook_note(call: &HookCall, limit: usize) -> (String, Vec<String>) {
         out.push_str(&nudge);
     }
     (out, ids)
+}
+
+/// The prompt's candidates and Jev's judgment of them, when this machine
+/// turned Jev on and it answered. Candidates come from the search without
+/// the local cross-encoder, which Jev replaces.
+fn judged_prompt(call: &HookCall, cue: &str) -> Option<(Vec<Hit>, jev::Judgment)> {
+    if call.event != "UserPromptSubmit" {
+        return None;
+    }
+    jev::config()?;
+    let hits = packset_search_opts(cue, 10, false).ok()?;
+    let candidates: Vec<Hit> = hits
+        .into_iter()
+        .filter(|h| !UNREVIEWED_KINDS.contains(&h.kind.as_str()))
+        .filter(is_refresher)
+        .take(10)
+        .collect();
+    let texts: Vec<&str> = candidates.iter().map(|h| h.text.as_str()).collect();
+    let judged = jev::judge(cue, &texts)?;
+    Some((candidates, judged))
 }
 
 /// The context the hook injects. A camel-case runner does not see prompt
@@ -2720,12 +2765,24 @@ pub const CORRECTION_CUES: &[&str] = &[
 /// prefer` or `ljos remember` before it goes on. Once a session for the
 /// same cue, so a run of corrections does not repeat it.
 fn correction_nudge(call: &HookCall) -> Option<(String, String)> {
+    correction_nudge_as(call, None)
+}
+
+/// [`correction_nudge`] with a verdict from elsewhere: `Some` is Jev's
+/// answer and replaces the phrase list, `None` keeps the list.
+fn correction_nudge_as(call: &HookCall, verdict: Option<bool>) -> Option<(String, String)> {
     if call.event != "UserPromptSubmit" {
         return None;
     }
-    let lower = call.cue.to_lowercase();
-    let hit = CORRECTION_CUES.iter().find(|c| lower.contains(*c))?;
-    let key = format!("correction:{hit}");
+    let key = match verdict {
+        Some(false) => return None,
+        Some(true) => "correction:judged".to_string(),
+        None => {
+            let lower = call.cue.to_lowercase();
+            let hit = CORRECTION_CUES.iter().find(|c| lower.contains(*c))?;
+            format!("correction:{hit}")
+        }
+    };
     if seen_ids(call.session.as_deref()).contains(&key) {
         return None;
     }
@@ -2780,14 +2837,26 @@ fn cue_at_word_end(text: &str, cue: &str) -> bool {
 /// instead of one agent's opinion. Once a session, since one decision
 /// is usually argued over several prompts.
 fn decision_nudge(call: &HookCall) -> Option<(String, String)> {
+    decision_nudge_as(call, None)
+}
+
+/// [`decision_nudge`] with a verdict from elsewhere, as for corrections.
+fn decision_nudge_as(call: &HookCall, verdict: Option<bool>) -> Option<(String, String)> {
     if call.event != "UserPromptSubmit" {
         return None;
     }
-    // A question is put in the prompt's opening; a long pasted report that
-    // mentions options further down is not a choice put to the agent.
-    let opening: String = call.cue.chars().take(DECISION_OPENING).collect();
-    let lower = format!(" {} ", opening.to_lowercase());
-    DECISION_CUES.iter().find(|c| cue_at_word_end(&lower, c))?;
+    match verdict {
+        Some(false) => return None,
+        Some(true) => {}
+        None => {
+            // A question is put in the prompt's opening; a long pasted report
+            // that mentions options further down is not a choice put to the
+            // agent.
+            let opening: String = call.cue.chars().take(DECISION_OPENING).collect();
+            let lower = format!(" {} ", opening.to_lowercase());
+            DECISION_CUES.iter().find(|c| cue_at_word_end(&lower, c))?;
+        }
+    }
     let key = "decision-nudge".to_string();
     if seen_ids(call.session.as_deref()).contains(&key) {
         return None;
@@ -5915,6 +5984,7 @@ pub fn doctor() -> Vec<Habitat> {
         (seat, runners.join().unwrap_or_default())
     });
     out.extend(runners);
+    out.extend(jev::doctor_row());
     out
 }
 
@@ -11234,6 +11304,28 @@ mod tests {
             waited >= std::time::Duration::from_millis(250),
             "{waited:?}"
         );
+    }
+
+    #[test]
+    fn a_verdict_from_jev_replaces_the_phrase_lists() {
+        let _g = env_guard();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", dir.path()) };
+        let call = |cue: &str, session: &str| HookCall {
+            event: "UserPromptSubmit".into(),
+            cue: cue.into(),
+            session: Some(session.into()),
+            shape: HookShape::Asks,
+        };
+        let plain = call("add the timeline verb", "verdict-1");
+        assert!(decision_nudge_as(&plain, None).is_none(), "no cue word");
+        assert!(decision_nudge_as(&plain, Some(true)).is_some(), "judged a choice");
+        let asked = call("should we seal with age or gpg?", "verdict-2");
+        assert!(decision_nudge_as(&asked, Some(false)).is_none(), "judged not a choice");
+        let (key, _) = correction_nudge_as(&plain, Some(true)).expect("judged a correction");
+        assert_eq!(key, "correction:judged");
+        assert!(correction_nudge_as(&plain, Some(false)).is_none());
+        unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
     }
 
     #[test]
