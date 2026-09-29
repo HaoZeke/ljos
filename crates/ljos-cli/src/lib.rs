@@ -4788,14 +4788,6 @@ pub fn issue_options(body: &str) -> Vec<String> {
     Vec::new()
 }
 
-/// What a Jev ballot did: cast under the persona's name, or handed to a
-/// subagent because Jev was not sure enough.
-#[derive(Debug, Clone, PartialEq)]
-pub enum JevVote {
-    Cast(jev::Ballot),
-    Escalated(jev::Ballot),
-}
-
 /// Jev's answer for a persona on an issue, not yet cast: its brief, less
 /// the closing instructions a subagent needs, is the state, and the
 /// issue's options are the choices.
