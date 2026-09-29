@@ -4,6 +4,12 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
+- A prompt or tool-result hook answers inside 8 s, with no context rather
+  than being cut off by its runner; an identical call started in the last
+  20 s returns at once, so a hook file two runners load runs once per
+  event. The reranked prompt search gets 2.5 s, then the lexical search
+  answers. Tool gates are exempt from both.
+
 - A lesson is stored as an episode (`horizon:transient`). It is kept
   and it is not a refresher. A recalled review promotes it to
   `horizon:standing`, and so does consolidation when the lesson
