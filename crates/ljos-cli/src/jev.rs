@@ -507,6 +507,103 @@ fn count(what: &str) {
     }
 }
 
+/// The stop audit's cuts. A stop is held back only on a near-certain
+/// answer: the model is asked about the agent's own words, and a false
+/// block costs the person a turn.
+pub const AUDIT_CLAIM_AT: f64 = 0.9;
+/// The test run shown counts as red at or under this.
+pub const AUDIT_RED_BELOW: f64 = 0.1;
+/// The final message counts as deferring asked work at or over this.
+pub const AUDIT_DEFER_AT: f64 = 0.9;
+
+/// What Jev said about an agent about to stop.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Audit {
+    /// The final message claims the work is done, passing or ready.
+    pub claims_complete: f64,
+    /// The last test output shown passes with no failure.
+    pub tests_green: f64,
+    /// The final message puts part of the asked work off, or out of scope.
+    pub deferral: f64,
+}
+
+/// The audit request: the turn as state, three nouls.
+#[must_use]
+pub fn audit_request(model: &str, state: &str) -> Value {
+    serde_json::json!({
+        "model": model,
+        "state": state,
+        "questions": {
+            "claims_complete": {
+                "type": "noul",
+                "instructions": "Does the agent's final message claim the asked work is done, complete, passing, green or ready?",
+                "criteria": {
+                    "true": "It says the work is finished or the tests pass",
+                    "false": "It reports progress, a failure, a question or what is still open"
+                }
+            },
+            "tests_green": {
+                "type": "noul",
+                "instructions": "Does the most recent test output in the state pass, with no failed, errored or crashed test?",
+                "criteria": {
+                    "true": "The latest run reports every test passing",
+                    "false": "The latest run reports a failure, an error, a crash or a build that did not finish"
+                }
+            },
+            "deferral": {
+                "type": "noul",
+                "instructions": "Does the final message put part of what the person asked off to later, or call it out of scope, without naming something outside the agent's control that blocks it?",
+                "criteria": {
+                    "true": "It leaves asked work for a later change, session or person, with no external block",
+                    "false": "It finishes the asked work, or names a real block such as a missing credential or a failing external service"
+                }
+            }
+        }
+    })
+}
+
+/// Read the audit; `None` on a partial answer.
+#[must_use]
+pub fn parse_audit(body: &Value) -> Option<Audit> {
+    let a = body.get("answers")?;
+    let noul = |k: &str| a.get(k)?.get("noul")?.as_f64();
+    Some(Audit {
+        claims_complete: noul("claims_complete")?,
+        tests_green: noul("tests_green")?,
+        deferral: noul("deferral")?,
+    })
+}
+
+/// Ask Jev about a turn that is about to end.
+#[must_use]
+pub fn audit(state: &str) -> Option<Audit> {
+    let (cfg, key) = config()?;
+    let body = audit_request(&cfg.model, state);
+    let reply = post(&cfg, &key, body, "stop-audit", Value::Null)?;
+    parse_audit(&reply)
+}
+
+/// Why a stop is held back, from the audit and whether a test ran in the
+/// turn; `None` lets the agent stop.
+#[must_use]
+pub fn audit_reason(a: &Audit, test_ran: bool) -> Option<String> {
+    if test_ran && a.claims_complete >= AUDIT_CLAIM_AT && a.tests_green <= AUDIT_RED_BELOW {
+        return Some(
+            "The final message says the work is done, and the last test run shown is red. \
+             Say what still fails, or fix it, before stopping."
+                .to_string(),
+        );
+    }
+    if a.deferral >= AUDIT_DEFER_AT {
+        return Some(
+            "The final message leaves part of the asked work for later without naming what blocks it. \
+             Do that part, or say in one sentence what outside the work blocks it."
+                .to_string(),
+        );
+    }
+    None
+}
+
 fn state_dir() -> Option<PathBuf> {
     Some(
         std::env::var_os("XDG_STATE_HOME")
@@ -718,5 +815,19 @@ mod tests {
         assert!(cached("req-b", 7).is_none(), "another request misses");
         assert!(cached("req-a", 0).is_none(), "0 days is off");
         unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+    }
+
+    #[test]
+    fn a_stop_is_held_only_on_done_beside_red_or_an_open_deferral() {
+        let a = |c: f64, g: f64, d: f64| Audit { claims_complete: c, tests_green: g, deferral: d };
+        assert!(audit_reason(&a(0.95, 0.05, 0.1), true).is_some(), "done beside red");
+        assert!(audit_reason(&a(0.95, 0.05, 0.1), false).is_none(), "no test ran, nothing to be red");
+        assert!(audit_reason(&a(0.95, 0.9, 0.1), true).is_none(), "done beside green");
+        assert!(audit_reason(&a(0.5, 0.05, 0.1), true).is_none(), "a red run reported as red");
+        assert!(audit_reason(&a(0.2, 0.9, 0.95), false).is_some(), "work put off");
+        let reply = serde_json::json!({"answers": {
+            "claims_complete": {"noul": 0.9}, "tests_green": {"noul": 0.1}, "deferral": {"noul": 0.0}}});
+        assert_eq!(parse_audit(&reply), Some(a(0.9, 0.1, 0.0)));
+        assert_eq!(audit_request("m", "s")["questions"].as_object().unwrap().len(), 3);
     }
 }

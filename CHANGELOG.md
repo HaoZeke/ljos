@@ -4,6 +4,12 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
+- With Jev on, `Stop` and `SubagentStop` audit the turn once from the
+  runner's transcript. A final message that claims done beside a red
+  test run, or that puts asked work off with no named block, holds the
+  agent for one more round with the reason. Whether a test ran is read
+  from the commands in code; the second stop is never audited.
+
 - `ljos vote ISSUE --as NAME --jev` and `ljos panel ISSUE --jev` ask Jev
   for persona ballots. A sure ballot is cast with the option's
   probability as its confidence and Jev's forecast as its prediction.

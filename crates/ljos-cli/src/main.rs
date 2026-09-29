@@ -775,9 +775,22 @@ fn main() -> Result<()> {
                             "{}",
                             serde_json::json!({"decision": "block", "reason": reason})
                         );
+                        return Ok(());
                     }
                 }
+                if let Some(reason) = ljos_cli::stop_audit(&input, stop_active) {
+                    println!("{}", serde_json::json!({"decision": "block", "reason": reason}));
+                }
                 return Ok(());
+            }
+            // An agent about to end its turn is audited once: a done claim
+            // beside a red test run, or asked work put off, holds it for
+            // one more round.
+            if call.event == "Stop" && call.shape != ljos_cli::HookShape::Context {
+                if let Some(reason) = ljos_cli::stop_audit(&input, stop_active) {
+                    println!("{}", serde_json::json!({"decision": "block", "reason": reason}));
+                    return Ok(());
+                }
             }
             // At the end of a session the memories it used fire together,
             // and there is nothing to say.

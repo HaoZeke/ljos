@@ -2486,6 +2486,169 @@ pub fn hook_subagent(input: &str) -> (Option<String>, bool, String) {
     (kind, active, agent)
 }
 
+/// A command line that runs a test suite. Exact, so it is code, not a
+/// judgment.
+#[must_use]
+pub fn runs_tests(command: &str) -> bool {
+    const RUNNERS: &[&str] = &[
+        "cargo test", "cargo nextest", "pytest", "ctest", "meson test", "npm test",
+        "npm run test", "pnpm test", "go test", "make check", "make test", "repo-test",
+        "tox", "bats ", "prove ", "mix test", "gradle test", "mvn test",
+    ];
+    RUNNERS.iter().any(|r| command.contains(r))
+}
+
+/// The turn a stop ends, read from the runner's transcript: the person's
+/// last request, the shell commands since it, the output of the latest
+/// test run (or of the last commands when none ran), and the final
+/// message.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct StopTurn {
+    pub request: String,
+    pub commands: Vec<String>,
+    pub test_ran: bool,
+    pub outputs: Vec<String>,
+    pub final_message: String,
+}
+
+fn tail_chars(s: &str, n: usize) -> String {
+    let count = s.chars().count();
+    s.chars().skip(count.saturating_sub(n)).collect()
+}
+
+fn block_text(content: &Value) -> String {
+    match content {
+        Value::String(t) => t.clone(),
+        Value::Array(parts) => parts
+            .iter()
+            .filter_map(|p| p["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
+/// Read a JSONL transcript of `user` and
+/// `assistant` entries whose `message.content` is text or blocks
+/// (`text`, `tool_use`, `tool_result`).
+#[must_use]
+pub fn stop_turn_from_transcript(text: &str) -> StopTurn {
+    let entries: Vec<Value> = text
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .collect();
+    let is_prompt = |e: &Value| {
+        e["type"] == "user"
+            && !e["isMeta"].as_bool().unwrap_or(false)
+            && match &e["message"]["content"] {
+                Value::String(t) => !t.trim_start().starts_with('<'),
+                Value::Array(parts) => {
+                    parts.iter().any(|p| p["type"] == "text")
+                        && !parts.iter().any(|p| p["type"] == "tool_result")
+                }
+                _ => false,
+            }
+    };
+    let start = entries.iter().rposition(is_prompt).unwrap_or(0);
+    let mut turn = StopTurn {
+        request: entries
+            .get(start)
+            .map(|e| block_text(&e["message"]["content"]))
+            .unwrap_or_default(),
+        ..StopTurn::default()
+    };
+    let mut pending: std::collections::BTreeMap<String, String> = Default::default();
+    let mut outputs: Vec<(bool, String)> = Vec::new();
+    for e in entries.iter().skip(start + 1) {
+        let Value::Array(parts) = &e["message"]["content"] else {
+            if e["type"] == "assistant" {
+                turn.final_message = block_text(&e["message"]["content"]);
+            }
+            continue;
+        };
+        for part in parts {
+            match part["type"].as_str() {
+                Some("tool_use") => {
+                    if let Some(cmd) = part["input"]["command"].as_str() {
+                        let cmd: String = cmd.chars().take(200).collect();
+                        if let Some(id) = part["id"].as_str() {
+                            pending.insert(id.to_string(), cmd.clone());
+                        }
+                        turn.test_ran |= runs_tests(&cmd);
+                        turn.commands.push(cmd);
+                    }
+                }
+                Some("tool_result") => {
+                    let id = part["tool_use_id"].as_str().unwrap_or("");
+                    if let Some(cmd) = pending.remove(id) {
+                        let out = tail_chars(&block_text(&part["content"]), 1500);
+                        outputs.push((runs_tests(&cmd), format!("$ {cmd}\n{out}")));
+                    }
+                }
+                Some("text") if e["type"] == "assistant" => {
+                    turn.final_message = part["text"].as_str().unwrap_or("").to_string();
+                }
+                _ => {}
+            }
+        }
+    }
+    let tests: Vec<String> = outputs.iter().filter(|o| o.0).map(|o| o.1.clone()).collect();
+    let chosen = if tests.is_empty() {
+        outputs.into_iter().map(|o| o.1).collect::<Vec<_>>()
+    } else {
+        tests
+    };
+    turn.outputs = chosen.into_iter().rev().take(2).rev().collect();
+    let n = turn.commands.len();
+    turn.commands = turn.commands.split_off(n.saturating_sub(30));
+    turn
+}
+
+impl StopTurn {
+    /// The audit state, bounded to a few thousand tokens.
+    #[must_use]
+    pub fn state(&self) -> String {
+        format!(
+            "The person asked:\n{}\n\nShell commands the agent ran since:\n{}\n\nLatest output:\n{}\n\nThe agent's final message:\n{}\n",
+            tail_chars(&self.request, 1500),
+            self.commands.join("\n"),
+            self.outputs.join("\n---\n"),
+            tail_chars(&self.final_message, 3000)
+        )
+    }
+}
+
+/// Why an agent about to stop is held for one more round, from a Jev
+/// audit of the turn; `None` lets it stop. Only a runner's first attempt
+/// is audited, only with Jev on, and only a final message long enough to
+/// claim anything.
+#[must_use]
+pub fn stop_audit(input: &str, stop_active: bool) -> Option<String> {
+    if stop_active {
+        return None;
+    }
+    jev::config()?;
+    let v: Value = serde_json::from_str(input.trim()).ok()?;
+    let path = v["transcript_path"]
+        .as_str()
+        .or_else(|| v["transcriptPath"].as_str());
+    let mut turn = path
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|t| stop_turn_from_transcript(&t))
+        .unwrap_or_default();
+    if let Some(last) = v["last_assistant_message"]
+        .as_str()
+        .or_else(|| v["lastAssistantMessage"].as_str())
+    {
+        turn.final_message = last.to_string();
+    }
+    if turn.final_message.chars().count() < 80 {
+        return None;
+    }
+    let a = jev::audit(&turn.state())?;
+    jev::audit_reason(&a, turn.test_ran)
+}
+
 /// Tool calls a conversation may make without a word to the seat before the
 /// hook reminds it. A sitting opened at the start and nothing after it is
 /// how long work went unrecorded.
@@ -12732,6 +12895,26 @@ mod tests {
         assert!(!jev_panel_stands(&[b("age", 0.95), b("gpg", 0.9)]), "split");
         assert!(!jev_panel_stands(&[b("age", 0.95), b("age", 0.6)]), "one unsure");
         assert!(!jev_panel_stands(&[]));
+    }
+
+    #[test]
+    fn a_turn_is_read_from_the_last_request_to_the_final_message() {
+        let lines = [
+            r#"{"type":"user","message":{"content":"old request"}}"#,
+            r#"{"type":"user","message":{"content":"fix the parser and test it"}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"cargo test -p brio"}}]}}"#,
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"test result: FAILED. 3 passed; 1 failed"}]}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"All done, the parser works."}]}}"#,
+        ]
+        .join("\n");
+        let t = stop_turn_from_transcript(&lines);
+        assert_eq!(t.request, "fix the parser and test it");
+        assert!(t.test_ran);
+        assert_eq!(t.commands, vec!["cargo test -p brio"]);
+        assert!(t.outputs[0].contains("1 failed"));
+        assert_eq!(t.final_message, "All done, the parser works.");
+        assert!(t.state().contains("The agent's final message:\nAll done"));
+        assert!(!runs_tests("git status"));
     }
 
     #[test]

@@ -421,6 +421,31 @@ model then spends only on the contested questions. A ballot costs about
 Every Jev answer goes to =$XDG_STATE_HOME/ljos/jev-log.jsonl=. =ljos
 learn= scores a cast ballot's confidence as it does any voter's.
 
+* Hold a done claim beside a red test
+
+With Jev on, the =Stop= and =SubagentStop= hooks audit the turn once
+before the agent stops. The state holds four parts, bounded to a few
+thousand tokens:
+
+- the person's last request
+- the shell commands since it
+- the latest test output, or the last output when no test ran
+- the final message
+
+Jev answers three questions about it:
+
+| question | holds the stop at |
+|---|---|
+| =claims_complete= | 0.9 or above, with =tests_green= 0.1 or under and a test run in the turn |
+| =tests_green= | (with the above) |
+| =deferral= | 0.9 or above |
+
+Whether a test ran is decided in code, from the command line. A held
+agent gets the reason and one more round; its second attempt to stop is
+never audited, so it cannot loop. A final message under 80 characters is
+not sent. The cuts sit in =jev.rs= beside the questions. A stop costs
+about 3,000 input tokens, or $0.00013.
+
 * Move the trust rows without an outcome
 
 #+begin_src console
