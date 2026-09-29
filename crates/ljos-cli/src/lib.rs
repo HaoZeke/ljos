@@ -2013,7 +2013,7 @@ pub fn take_hook_note(session: Option<&str>) -> (String, Vec<String>) {
     let ids = hook_hold_ids_path(session)
         .and_then(|p| std::fs::read_to_string(p).ok())
         .map(|t| {
-            let _ = hook_hold_ids_path(session).map(|p| std::fs::remove_file(p));
+            let _ = hook_hold_ids_path(session).map(std::fs::remove_file);
             t.lines()
                 .map(str::trim)
                 .filter(|l| !l.is_empty())
@@ -2188,6 +2188,7 @@ fn names_the_cue(text: &str, cue: &str) -> bool {
     want.iter().any(|w| have.binary_search(w).is_ok())
 }
 
+#[cfg(test)]
 /// A claim about one numbered pull request is a snapshot of that review.
 /// "A PR branch must contain main" is a rule and stays. "PR 32 replays PR 36" does not.
 fn names_a_numbered_pr(text: &str) -> bool {
@@ -2205,6 +2206,7 @@ fn names_a_numbered_pr(text: &str) -> bool {
     false
 }
 
+#[cfg(test)]
 /// `rest` begins at a pull-request word. True when a number follows it.
 fn pr_number_at(rest: &str) -> bool {
     let after = if let Some(s) = rest.strip_prefix("pull requests") {
@@ -2229,6 +2231,7 @@ fn pr_number_at(rest: &str) -> bool {
     after.starts_with(|c: char| c.is_ascii_digit())
 }
 
+#[cfg(test)]
 /// `#80` names one pull request even when the word PR is not in front of it.
 fn hash_number_at(rest: &str) -> bool {
     let Some(after) = rest.strip_prefix('#') else {
@@ -2237,12 +2240,14 @@ fn hash_number_at(rest: &str) -> bool {
     after.starts_with(|c: char| c.is_ascii_digit())
 }
 
+#[cfg(test)]
 /// A claim about one artifact: a numbered pull request, a ticket id, or a commit.
 /// That is a snapshot of one review. A rule that names no artifact is standing.
 fn is_transient(text: &str) -> bool {
     names_a_numbered_pr(text) || names_a_ticket(text) || names_a_commit(text)
 }
 
+#[cfg(test)]
 /// `project-ab12`, the tracker's id shape. A hyphenated English word is longer.
 fn names_a_ticket(text: &str) -> bool {
     text.split(|c: char| !c.is_ascii_alphanumeric() && c != '-')
@@ -2258,6 +2263,7 @@ fn names_a_ticket(text: &str) -> bool {
         })
 }
 
+#[cfg(test)]
 /// A hex token with a digit in it. Plain words that happen to be hex have none.
 fn names_a_commit(text: &str) -> bool {
     text.split(|c: char| !c.is_ascii_alphanumeric()).any(|tok| {
@@ -2812,8 +2818,7 @@ pub fn held_issue() -> Option<String> {
         let rows: Value = serde_json::from_str(&out.stdout).ok()?;
         rows.as_array()?
             .iter()
-            .filter(|c| c["state"].as_str() == Some("STARTED"))
-            .next_back()?["id"]
+            .rfind(|c| c["state"].as_str() == Some("STARTED"))?["id"]
             .as_str()
             .map(str::to_string)
     })
@@ -2967,6 +2972,7 @@ pub const CORRECTION_CUES: &[&str] = &[
     "you keep",
 ];
 
+#[cfg(test)]
 /// On a prompt that reads as a correction, the one line that turns it
 /// into memory: the agent writes the preference or lesson with `ljos
 /// prefer` or `ljos remember` before it goes on. Once a session for the
@@ -3040,6 +3046,7 @@ fn cue_at_word_end(text: &str, cue: &str) -> bool {
     })
 }
 
+#[cfg(test)]
 /// On a prompt that puts a choice, the lines that take it to a panel
 /// instead of one agent's opinion. Once a session, since one decision
 /// is usually argued over several prompts.
