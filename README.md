@@ -43,6 +43,7 @@ ljos brief reviewer vissue-xxxx                # what a subagent playing reviewe
 ljos remember --as reviewer "..."              # a lesson the persona keeps; its next brief opens with it
 ljos panel vissue-xxxx --out panel             # every persona's brief as a file, for a runner without MCP
 ljos vote vissue-xxxx --for hold --as reviewer
+ljos panel vissue-xxxx --jev                   # with Jev on: cast when every seat is sure and agrees, else briefs for subagents
 ljos learn vissue-xxxx --outcome ship
 ljos due
 ljos hud                                       # execs sibling ljos-hud (overlay; P pops out)
@@ -63,6 +64,10 @@ ljos findings out/campaign.json --remember     # an eb-stack campaign's typed fi
 `ljos sitting ISSUE [--playbook NAME]` opens a sitting in the protocol's order and stops at the first store that does not answer: doctor, cards, the review clock, the island the issue's title activates, the playbook copied before recall, the working set, the timeline, the claim. Absent `--playbook`, a name already bound, else a closed-set token in the title, else `sit`. The playbook name is a tracker note until finish or release. `ljos panel` refuses until one is bound. `ljos finish ISSUE --lesson "..." [--outcome OPTION]` closes it: the lesson is remembered, the island fires, the session node completes, the ticket closes, and a named outcome shrinks the voters it refuted. The loop that makes the seat a memory runs every time, not only when somebody remembers it.
 
 When the tracker is a git checkout, the claim and the finish each commit the ticket's `issues.org` (that file only) and push it, so another host sees the claim and the closure. `LJOS_TRACKER_GIT=commit` keeps it local; `=off` skips it. `ljos doctor` names how many commits origin lacks and fails the tracker row when that count sits through the push wait.
+
+## Jev, where a machine allows it
+
+`~/.config/ljos/jev.toml` with `enabled = true` and a key command hands four of the seat's judgments to Jev, TypeSafe's decision model: which claims bear on a prompt, whether the prompt corrects the agent or puts a choice, a persona's ballot, and whether an agent may stop. The local answer stays as the fallback, and a machine without the file runs as before. A prompt costs about $0.00004 and `ljos doctor` prints the month's spend. The explanation's section on judgment says how it slots into what the seat already did; the how-to has the setup.
 
 ## Who is sitting
 
