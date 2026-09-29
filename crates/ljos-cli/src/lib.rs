@@ -12317,6 +12317,8 @@ mod tests {
     /// and the seen file goes with the session.
     #[test]
     fn a_sessions_injected_memories_are_read_back_and_cleared() {
+        // The seen file lives under XDG_RUNTIME_DIR, which other tests move.
+        let _g = env_guard();
         let session = format!("end-test-{}", std::process::id());
         mark_seen(
             Some(&session),
