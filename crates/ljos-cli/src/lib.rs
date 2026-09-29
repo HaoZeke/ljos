@@ -2309,7 +2309,10 @@ pub fn hook_note(call: &HookCall, limit: usize) -> (String, Vec<String>) {
     // The cross-encoder reads the prompt and the claim together. The lexical
     // search is the fallback when that stage is down, and it still refuses
     // an episode.
-    let Ok(hits) = packset_search_opts(cue, 10, true).or_else(|_| packset_search(cue)) else {
+    // The rerank gets a budget inside the runner's hook timeout; past it the
+    // lexical search answers, which takes a fraction of a second.
+    let reranked = with_pack_timeout(HOOK_RERANK_BUDGET_MS, || packset_search_opts(cue, 10, true));
+    let Ok(hits) = reranked.or_else(|_| packset_search(cue)) else {
         return (nudge, pending);
     };
     let top = hits.iter().map(|h| h.score).fold(0.0_f64, f64::max);
@@ -2611,6 +2614,26 @@ pub fn subagent_stop_reason(
              `ljos remember \"...\" --as ROLE`. Otherwise stop."
         )
     })
+}
+
+/// How long the prompt hook waits for the reranked search. Runners cut a
+/// hook off at 10 to 20 s, and a loaded host has made the rerank alone take
+/// longer than that.
+pub const HOOK_RERANK_BUDGET_MS: u64 = 4000;
+
+/// Run `f` with the pack client's request timeout set to `ms`, then put
+/// back whatever it was.
+fn with_pack_timeout<R>(ms: u64, f: impl FnOnce() -> R) -> R {
+    let before = std::env::var_os("PACKSET_TIMEOUT_MS");
+    // SAFETY: the hook reads and sets this on one thread, before and after
+    // the one request it bounds.
+    unsafe { std::env::set_var("PACKSET_TIMEOUT_MS", ms.to_string()) };
+    let out = f();
+    match before {
+        Some(v) => unsafe { std::env::set_var("PACKSET_TIMEOUT_MS", v) },
+        None => unsafe { std::env::remove_var("PACKSET_TIMEOUT_MS") },
+    }
+    out
 }
 
 /// Phrases a person uses when the agent has forgotten something it was
