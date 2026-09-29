@@ -11745,9 +11745,6 @@ mod tests {
 
     #[test]
     fn a_verdict_from_jev_replaces_the_phrase_lists() {
-        let _g = env_guard();
-        let dir = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("XDG_RUNTIME_DIR", dir.path()) };
         let call = |cue: &str, session: &str| HookCall {
             event: "UserPromptSubmit".into(),
             cue: cue.into(),
@@ -11768,7 +11765,6 @@ mod tests {
         let (key, _) = correction_nudge_as(&plain, Some(true)).expect("judged a correction");
         assert_eq!(key, "correction:judged");
         assert!(correction_nudge_as(&plain, Some(false)).is_none());
-        unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
     }
 
     #[test]
