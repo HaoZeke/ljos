@@ -2,6 +2,19 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
+## Unreleased
+
+- A subagent's stop hook names only the issue its own conversation holds.
+  A hold written from a shell whose runner the process tree had lost
+  recorded the multiplexer (herdr) as its conversation, and every subagent
+  under that multiplexer then matched it and was asked for a ballot on
+  another session's decision. herdr is a session process now, a command
+  under one records its pane's shell, and a hold or seat record owned by a
+  session process matches nobody.
+- `ljos vote ISSUE --withdraw [--as NAME]` (MCP `withdraw`) takes back a
+  ballot and its forecast. The tracker's logbook keeps what the ballot
+  was, and the settle and the surprisingly popular reading drop both.
+
 ## 0.17.0 (2026-09-29)
 
 - With Jev on, `Stop` and `SubagentStop` audit the turn once from the

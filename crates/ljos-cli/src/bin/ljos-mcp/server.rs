@@ -231,6 +231,10 @@ pub struct VoteArgs {
     /// not cast, and the reply says to start a subagent from its brief.
     #[serde(default)]
     pub jev: bool,
+    /// Take back the ballot and its forecast, as the seat or `as` a persona.
+    /// The issue's logbook keeps what the ballot was.
+    #[serde(default)]
+    pub withdraw: bool,
 }
 
 /// A persona and the issue it will read.
@@ -1007,6 +1011,23 @@ impl LjosServer {
                 said.0
                     .text
                     .push_str(&ljos_cli::persist_tracker(&args.issue, "ballot cast"));
+                Ok(said)
+            }
+            None if args.withdraw => {
+                let mut said = habitat_as(
+                    "vissue",
+                    &["vote", &args.issue, "--withdraw"],
+                    args.as_persona.as_deref(),
+                )?;
+                let who = identity_or_seat(args.as_persona.as_deref())
+                    .unwrap_or_else(|| "seat".to_string());
+                ljos_cli::withdraw_prediction(&args.issue, &who).map_err(refused)?;
+                said.0
+                    .text
+                    .push_str(&format!("forecast withdrawn for {who}\n"));
+                said.0
+                    .text
+                    .push_str(&ljos_cli::persist_tracker(&args.issue, "ballot withdrawn"));
                 Ok(said)
             }
             None if args.jev => {

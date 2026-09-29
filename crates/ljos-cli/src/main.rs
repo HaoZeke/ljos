@@ -15,9 +15,9 @@ use ljos_cli::{
     policyd_required, post_hook_stdout, predictions_of, prompt_hook_stdout, read_campaign, receive,
     release, remember_findings, resolve_assignee, rows_about, rules_from_pack, run, run_as,
     run_captured, session_end, sitting_gated, stop_hook_stdout, tcb_check, timeline, topic_words,
-    tracker_show_json, trim_num, trust_from_pack, verdict_for, whoami, write_persona,
-    write_prediction, write_rule, write_trust, Persona, Reading, Rule, Trust, HARNESSES_EXAMPLE,
-    LEARN_BETA, POLICY_TCB, PROTOCOL,
+    tracker_show_json, trim_num, trust_from_pack, verdict_for, whoami, withdraw_prediction,
+    write_persona, write_prediction, write_rule, write_trust, Persona, Reading, Rule, Trust,
+    HARNESSES_EXAMPLE, LEARN_BETA, POLICY_TCB, PROTOCOL,
 };
 use std::path::PathBuf;
 
@@ -153,6 +153,11 @@ enum Cmd {
         /// a subagent when it is not.
         #[arg(long, requires = "as_persona", conflicts_with = "choice")]
         jev: bool,
+        /// Take back the ballot and its forecast, as the seat or `--as` a
+        /// persona: a ballot cast on the wrong issue or with no basis stops
+        /// counting, and the issue's logbook keeps what it was.
+        #[arg(long, conflicts_with_all = ["choice", "jev", "confidence", "used", "expect"])]
+        withdraw: bool,
     },
     /// The brief a subagent playing a persona starts from: view, domains, what the seat knows there, the work.
     Brief {
@@ -584,7 +589,20 @@ fn main() -> Result<()> {
             expect,
             as_persona,
             jev,
+            withdraw,
         } => match choice {
+            None if withdraw => {
+                run_as(
+                    "vissue",
+                    &["vote", &issue, "--withdraw"],
+                    as_persona.as_deref(),
+                )?;
+                let who = identity_or_seat(as_persona.as_deref()).unwrap_or_else(whoami_tracker);
+                withdraw_prediction(&issue, &who)
+                    .with_context(|| format!("ballot withdrawn; the forecast for {who} was not"))?;
+                println!("forecast withdrawn for {who}");
+                print!("{}", ljos_cli::persist_tracker(&issue, "ballot withdrawn"));
+            }
             None if jev => {
                 let name = as_persona.as_deref().unwrap_or_default();
                 match ljos_cli::jev_vote(name, &issue)? {

@@ -895,8 +895,24 @@ const WRAPPERS: &[&str] = &[
 /// Where a process tree stops being a program and becomes the session
 /// itself: above these, nobody ran the shell but the person.
 const SESSION: &[&str] = &[
-    "tmux", "screen", "zellij", "systemd", "init", "sshd", "login",
+    "tmux", "screen", "zellij", "herdr", "systemd", "init", "sshd", "login",
 ];
+
+/// Whether a process is the person's session rather than a program in it:
+/// a multiplexer, a login, the init system. Many conversations share one.
+fn is_session(comm: &str) -> bool {
+    SESSION.iter().any(|s| comm.starts_with(s))
+}
+
+/// The ancestors that belong to this conversation alone: the chain up to,
+/// not including, the first session process. Above it every pane and every
+/// runner shares the same processes.
+fn own_ancestry() -> Vec<(u32, String)> {
+    ancestry()
+        .into_iter()
+        .take_while(|(_, comm)| !is_session(comm))
+        .collect()
+}
 
 /// Path components that name a place, not a program.
 const PLACES: &[&str] = &[
@@ -997,7 +1013,7 @@ fn seat_from_tree() -> Option<Seat> {
         if WRAPPERS.contains(&name) {
             continue;
         }
-        if SESSION.iter().any(|s| name.starts_with(s)) {
+        if is_session(name) {
             return None;
         }
         let program = program_name(*pid, name);
@@ -2778,7 +2794,8 @@ pub fn hook_trace(input: &str, call: &HookCall, subagent: Option<&str>) {
 /// is exactly the one a subagent needs.
 fn runner_record_holders() -> Vec<String> {
     let mut out = Vec::new();
-    for (pid, _) in ancestry() {
+    // A record left for a multiplexer would hand its holder to every pane.
+    for (pid, _) in own_ancestry() {
         let Ok(text) = std::fs::read_to_string(seat_record_path(pid)) else {
             continue;
         };
@@ -5239,7 +5256,34 @@ pub fn predictions_of(atoms: &[Value], issue: &str) -> Vec<Prediction> {
             }
         }
     }
-    latest.into_values().map(|(_, p)| p).collect()
+    // A withdrawn forecast is a later `null`: the voter forecasts nothing.
+    latest
+        .into_values()
+        .map(|(_, p)| p)
+        .filter(|p| !p.expect.is_null())
+        .collect()
+}
+
+/// Take back `agent`'s forecast on an issue: a `null` prediction, later than
+/// the one it retracts, so the settle reads the voter as forecasting nothing.
+///
+/// # Errors
+///
+/// The pack refusing the write.
+pub fn withdraw_prediction(issue: &str, agent: &str) -> Result<Value> {
+    let client = pack()?;
+    let workspace = client.workspace();
+    let mut atom = atom_body(
+        "prediction",
+        &format!("{agent} withdrew the forecast on {issue}."),
+        &workspace,
+    );
+    atom["issue"] = Value::String(issue.into());
+    atom["agent"] = Value::String(agent.into());
+    atom["expect"] = Value::Null;
+    client
+        .post_atom(&atom)
+        .context("predict: POST /v1/atoms failed")
 }
 
 /// Forecasts as `ljos-consensus surprising --predictions` takes them.
@@ -8457,11 +8501,20 @@ fn hold_record_path(actor: &str) -> PathBuf {
 /// person types into.
 fn conversation_process() -> (u32, String) {
     let chain = ancestry();
-    chain
-        .iter()
-        .skip(1)
-        .find(|(_, comm)| !WRAPPERS.contains(&comm.as_str()))
-        .or_else(|| chain.get(1))
+    // A command whose runner the tree lost (a detached pty, a reparented
+    // shell) reaches the multiplexer first; the pane's own shell below it is
+    // the conversation, since the multiplexer is every pane's parent.
+    let mut below = chain.get(1);
+    for entry in chain.iter().skip(1) {
+        if is_session(&entry.1) {
+            break;
+        }
+        if !WRAPPERS.contains(&entry.1.as_str()) {
+            return entry.clone();
+        }
+        below = Some(entry);
+    }
+    below
         .cloned()
         .unwrap_or((std::process::id(), String::new()))
 }
@@ -8488,9 +8541,20 @@ fn write_hold(actor: &str, assignee: &str, node: &str) {
 /// whose holder is one of `holders`, or whose conversation process is an
 /// ancestor of this one. File reads only, so a hook can afford it.
 fn held_from_records(holders: &[String]) -> Option<String> {
-    let pids: Vec<String> = ancestry().iter().map(|(p, _)| p.to_string()).collect();
+    held_from_records_in(holders, &runtime_dir(), &own_ancestry())
+}
+
+/// [`held_from_records`] over one directory and one chain of ancestors. A
+/// record whose process is a session process names every conversation
+/// under that multiplexer, so it names none of them.
+fn held_from_records_in(
+    holders: &[String],
+    dir: &std::path::Path,
+    chain: &[(u32, String)],
+) -> Option<String> {
+    let pids: Vec<String> = chain.iter().map(|(p, _)| p.to_string()).collect();
     let mut best: Option<(String, String)> = None;
-    for entry in std::fs::read_dir(runtime_dir()).ok()?.flatten() {
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
         if !entry.file_name().to_string_lossy().starts_with("hold-") {
             continue;
         }
@@ -8498,12 +8562,17 @@ fn held_from_records(holders: &[String]) -> Option<String> {
             continue;
         };
         let lines: Vec<&str> = text.lines().map(str::trim).collect();
-        let (Some(holder), Some(pid), Some(at), Some(node)) =
-            (lines.first(), lines.get(2), lines.get(4), lines.get(5))
-        else {
+        let (Some(holder), Some(pid), Some(comm), Some(at), Some(node)) = (
+            lines.first(),
+            lines.get(2),
+            lines.get(3),
+            lines.get(4),
+            lines.get(5),
+        ) else {
             continue;
         };
-        let ours = holders.iter().any(|h| h == holder) || pids.iter().any(|p| p == pid);
+        let by_process = !is_session(comm) && pids.iter().any(|p| p == pid);
+        let ours = holders.iter().any(|h| h == holder) || by_process;
         if ours && !node.is_empty() && best.as_ref().is_none_or(|(t, _)| *at > t.as_str()) {
             best = Some(((*at).to_string(), (*node).to_string()));
         }
@@ -12963,6 +13032,70 @@ mod tests {
         assert_eq!(t.final_message, "All done, the parser works.");
         assert!(t.state().contains("The agent's final message:\nAll done"));
         assert!(!runs_tests("git status"));
+    }
+
+    #[test]
+    fn a_hold_the_multiplexer_owns_names_no_conversation_under_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let hold = |name: &str, holder: &str, pid: u32, comm: &str, at: &str, node: &str| {
+            std::fs::write(
+                dir.path().join(format!("hold-{name}")),
+                format!("{holder}\nseat\n{pid}\n{comm}\n{at}\n{node}\n"),
+            )
+            .unwrap();
+        };
+        // Another session's command lost its runner and recorded the
+        // multiplexer, newest of all.
+        hold(
+            "other",
+            "sess-other",
+            3142,
+            "herdr",
+            "2026-09-29T09:16:06Z",
+            "acme-5i5r",
+        );
+        // This conversation's runner holds its own issue.
+        hold(
+            "mine",
+            "sess-mine",
+            4901,
+            "acme",
+            "2026-09-29T08:00:00Z",
+            "brio-k6yq",
+        );
+        let chain = [
+            (9001, "ljos".to_string()),
+            (9000, "sh".to_string()),
+            (4901, "acme".to_string()),
+        ];
+        assert_eq!(
+            held_from_records_in(&[], dir.path(), &chain).as_deref(),
+            Some("brio-k6yq"),
+            "the runner's own record, not the multiplexer's"
+        );
+        let under_herdr = [(9001, "ljos".to_string()), (3142, "herdr".to_string())];
+        assert_eq!(held_from_records_in(&[], dir.path(), &under_herdr), None);
+        assert_eq!(
+            held_from_records_in(&["sess-other".to_string()], dir.path(), &under_herdr).as_deref(),
+            Some("acme-5i5r"),
+            "a holder named outright still matches"
+        );
+        assert!(is_session("herdr") && is_session("tmux: server") && !is_session("acme"));
+    }
+
+    #[test]
+    fn a_withdrawn_forecast_leaves_the_reading() {
+        let atom = |agent: &str, ts: &str, expect: Value| serde_json::json!({"kind": "prediction", "issue": "acme-1", "agent": agent, "ts": ts, "expect": expect});
+        let atoms = vec![
+            atom("brio", "2026-09-29T10:00:00Z", Value::String("ship".into())),
+            atom("brio", "2026-09-29T11:00:00Z", Value::Null),
+            atom("acme", "2026-09-29T10:00:00Z", Value::String("hold".into())),
+        ];
+        let left: Vec<String> = predictions_of(&atoms, "acme-1")
+            .into_iter()
+            .map(|p| p.agent)
+            .collect();
+        assert_eq!(left, vec!["acme"]);
     }
 
     #[test]
