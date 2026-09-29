@@ -474,7 +474,12 @@ fn cached(request: &str, days: u64) -> Option<Value> {
         return None;
     }
     let path = cache_file(request)?;
-    let age = std::fs::metadata(&path).ok()?.modified().ok()?.elapsed().ok()?;
+    let age = std::fs::metadata(&path)
+        .ok()?
+        .modified()
+        .ok()?
+        .elapsed()
+        .ok()?;
     if age > Duration::from_secs(days * 86_400) {
         let _ = std::fs::remove_file(&path);
         return None;
@@ -484,7 +489,9 @@ fn cached(request: &str, days: u64) -> Option<Value> {
 }
 
 fn keep(request: &str, reply: &Value) {
-    let Some(path) = cache_file(request) else { return };
+    let Some(path) = cache_file(request) else {
+        return;
+    };
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -501,7 +508,9 @@ fn count(what: &str) {
         .ok()
         .and_then(|t| toml::from_str(&t).ok())
         .unwrap_or_default();
-    *totals.entry(format!("{}-{what}", this_month())).or_default() += 1.0;
+    *totals
+        .entry(format!("{}-{what}", this_month()))
+        .or_default() += 1.0;
     if let Ok(text) = toml::to_string(&totals) {
         let _ = std::fs::write(path, text);
     }
@@ -699,13 +708,20 @@ pub fn doctor_row() -> Option<crate::Habitat> {
             if spent >= cfg.monthly_usd {
                 (format!("capped  {head}"), true)
             } else if config().is_none() {
-                ("on, but the key file or command gave no key".to_string(), false)
+                (
+                    "on, but the key file or command gave no key".to_string(),
+                    false,
+                )
             } else {
                 (format!("on  {head}"), true)
             }
         }
     };
-    Some(crate::Habitat { name: "jev", state, ok })
+    Some(crate::Habitat {
+        name: "jev",
+        state,
+        ok,
+    })
 }
 
 #[cfg(test)]
@@ -735,12 +751,21 @@ mod tests {
         let j = parse(&full, 2).unwrap();
         assert_eq!(j.bears, vec![0.9, 0.1]);
         assert!(j.bears(0) && !j.bears(1));
-        let strict = Judgment { bears_at: 0.95, ..j.clone() };
+        let strict = Judgment {
+            bears_at: 0.95,
+            ..j.clone()
+        };
         assert!(!strict.bears(0), "a higher cut drops the 0.9");
         assert!((j.choice - 0.7).abs() < 1e-9);
-        assert!((cost_of(&full, 0.042) - 0.0000378).abs() < 1e-12, "the API's figure");
+        assert!(
+            (cost_of(&full, 0.042) - 0.0000378).abs() < 1e-12,
+            "the API's figure"
+        );
         let direct = serde_json::json!({"usage": {"input_tokens": 1000, "output_tokens": 60}});
-        assert!((cost_of(&direct, 0.042) - 0.000042).abs() < 1e-12, "tokens at the price");
+        assert!(
+            (cost_of(&direct, 0.042) - 0.000042).abs() < 1e-12,
+            "tokens at the price"
+        );
         let partial = serde_json::json!({"answers": {"bears_0": {"noul": 0.9}}});
         assert!(parse(&partial, 2).is_none());
     }
@@ -775,8 +800,14 @@ mod tests {
     #[test]
     fn a_key_line_gives_its_value() {
         assert_eq!(key_from("sk-or-v1-abc\n").as_deref(), Some("sk-or-v1-abc"));
-        assert_eq!(key_from("apikey: sk-or-v1-abc\nurl: x\n").as_deref(), Some("sk-or-v1-abc"));
-        assert_eq!(key_from("apikey=sk-or-v1-abc").as_deref(), Some("sk-or-v1-abc"));
+        assert_eq!(
+            key_from("apikey: sk-or-v1-abc\nurl: x\n").as_deref(),
+            Some("sk-or-v1-abc")
+        );
+        assert_eq!(
+            key_from("apikey=sk-or-v1-abc").as_deref(),
+            Some("sk-or-v1-abc")
+        );
         assert_eq!(key_from("\n"), None);
     }
 
@@ -785,7 +816,10 @@ mod tests {
         let options = vec!["age".to_string(), "gpg".to_string()];
         let body = ballot_request("jev-1.13.0", "You are brio.", &options);
         assert_eq!(body["questions"]["ballot"]["type"], "choice");
-        assert_eq!(body["questions"]["forecast"]["criteria"]["gpg"], "most others pick gpg");
+        assert_eq!(
+            body["questions"]["forecast"]["criteria"]["gpg"],
+            "most others pick gpg"
+        );
         let reply = serde_json::json!({"answers": {
             "ballot": {"type": "choice", "choice": "age", "confidence": 0.97,
                        "probabilities": {"age": 0.98, "gpg": 0.02}},
@@ -795,12 +829,18 @@ mod tests {
         assert_eq!(b.choice, "age");
         assert!(!b.escalates(), "0.97 stands at the 0.8 cut");
         assert!((b.forecast["gpg"] - 0.03).abs() < 1e-9);
-        let unsure = Ballot { confidence: 0.6, ..b.clone() };
+        let unsure = Ballot {
+            confidence: 0.6,
+            ..b.clone()
+        };
         assert!(unsure.escalates(), "0.6 goes to a subagent");
         let off = serde_json::json!({"answers": {
             "ballot": {"choice": "rsa", "confidence": 0.9, "probabilities": {}},
             "forecast": {"choice": "age", "confidence": 0.9, "probabilities": {}}}});
-        assert!(parse_ballot(&off, &options).is_none(), "a choice off the list is refused");
+        assert!(
+            parse_ballot(&off, &options).is_none(),
+            "a choice off the list is refused"
+        );
     }
 
     #[test]
@@ -819,15 +859,40 @@ mod tests {
 
     #[test]
     fn a_stop_is_held_only_on_done_beside_red_or_an_open_deferral() {
-        let a = |c: f64, g: f64, d: f64| Audit { claims_complete: c, tests_green: g, deferral: d };
-        assert!(audit_reason(&a(0.95, 0.05, 0.1), true).is_some(), "done beside red");
-        assert!(audit_reason(&a(0.95, 0.05, 0.1), false).is_none(), "no test ran, nothing to be red");
-        assert!(audit_reason(&a(0.95, 0.9, 0.1), true).is_none(), "done beside green");
-        assert!(audit_reason(&a(0.5, 0.05, 0.1), true).is_none(), "a red run reported as red");
-        assert!(audit_reason(&a(0.2, 0.9, 0.95), false).is_some(), "work put off");
+        let a = |c: f64, g: f64, d: f64| Audit {
+            claims_complete: c,
+            tests_green: g,
+            deferral: d,
+        };
+        assert!(
+            audit_reason(&a(0.95, 0.05, 0.1), true).is_some(),
+            "done beside red"
+        );
+        assert!(
+            audit_reason(&a(0.95, 0.05, 0.1), false).is_none(),
+            "no test ran, nothing to be red"
+        );
+        assert!(
+            audit_reason(&a(0.95, 0.9, 0.1), true).is_none(),
+            "done beside green"
+        );
+        assert!(
+            audit_reason(&a(0.5, 0.05, 0.1), true).is_none(),
+            "a red run reported as red"
+        );
+        assert!(
+            audit_reason(&a(0.2, 0.9, 0.95), false).is_some(),
+            "work put off"
+        );
         let reply = serde_json::json!({"answers": {
             "claims_complete": {"noul": 0.9}, "tests_green": {"noul": 0.1}, "deferral": {"noul": 0.0}}});
         assert_eq!(parse_audit(&reply), Some(a(0.9, 0.1, 0.0)));
-        assert_eq!(audit_request("m", "s")["questions"].as_object().unwrap().len(), 3);
+        assert_eq!(
+            audit_request("m", "s")["questions"]
+                .as_object()
+                .unwrap()
+                .len(),
+            3
+        );
     }
 }

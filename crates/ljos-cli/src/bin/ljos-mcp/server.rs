@@ -1011,7 +1011,9 @@ impl LjosServer {
             }
             None if args.jev => {
                 let Some(name) = args.as_persona.as_deref() else {
-                    return Err(refused(anyhow::anyhow!("jev: a Jev ballot is cast as a persona; pass as")));
+                    return Err(refused(anyhow::anyhow!(
+                        "jev: a Jev ballot is cast as a persona; pass as"
+                    )));
                 };
                 let text = match ljos_cli::jev_vote(name, &args.issue).map_err(refused)? {
                     ljos_cli::JevVote::Cast(b) => format!(

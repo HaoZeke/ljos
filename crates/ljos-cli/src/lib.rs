@@ -2301,11 +2301,9 @@ pub fn hook_note(call: &HookCall, limit: usize) -> (String, Vec<String>) {
     // the prompt and whether it corrects or puts a choice. Without it, or
     // when it does not answer in time, the local path below runs.
     let judged = judged_prompt(call, cue);
-    let (correction, choice) = judged
-        .as_ref()
-        .map_or((None, None), |(_, j)| {
-            (Some(j.correction >= j.cue_at), Some(j.choice >= j.cue_at))
-        });
+    let (correction, choice) = judged.as_ref().map_or((None, None), |(_, j)| {
+        (Some(j.correction >= j.cue_at), Some(j.choice >= j.cue_at))
+    });
     for (key, extra) in [
         correction_nudge_as(call, correction),
         decision_nudge_as(call, choice),
@@ -2340,8 +2338,9 @@ pub fn hook_note(call: &HookCall, limit: usize) -> (String, Vec<String>) {
         // A machine that turned Jev on keeps the cross-encoder unloaded; a
         // prompt Jev was not asked about gets the lexical search.
         let rerank = !jev::enabled();
-        let reranked =
-            with_pack_timeout(HOOK_RERANK_BUDGET_MS, || packset_search_opts(cue, 10, rerank));
+        let reranked = with_pack_timeout(HOOK_RERANK_BUDGET_MS, || {
+            packset_search_opts(cue, 10, rerank)
+        });
         let Ok(found) = reranked.or_else(|_| packset_search(cue)) else {
             return (nudge, pending);
         };
@@ -2491,9 +2490,24 @@ pub fn hook_subagent(input: &str) -> (Option<String>, bool, String) {
 #[must_use]
 pub fn runs_tests(command: &str) -> bool {
     const RUNNERS: &[&str] = &[
-        "cargo test", "cargo nextest", "pytest", "ctest", "meson test", "npm test",
-        "npm run test", "pnpm test", "go test", "make check", "make test", "repo-test",
-        "tox", "bats ", "prove ", "mix test", "gradle test", "mvn test",
+        "cargo test",
+        "cargo nextest",
+        "pytest",
+        "ctest",
+        "meson test",
+        "npm test",
+        "npm run test",
+        "pnpm test",
+        "go test",
+        "make check",
+        "make test",
+        "repo-test",
+        "tox",
+        "bats ",
+        "prove ",
+        "mix test",
+        "gradle test",
+        "mvn test",
     ];
     RUNNERS.iter().any(|r| command.contains(r))
 }
@@ -2592,7 +2606,11 @@ pub fn stop_turn_from_transcript(text: &str) -> StopTurn {
             }
         }
     }
-    let tests: Vec<String> = outputs.iter().filter(|o| o.0).map(|o| o.1.clone()).collect();
+    let tests: Vec<String> = outputs
+        .iter()
+        .filter(|o| o.0)
+        .map(|o| o.1.clone())
+        .collect();
     let chosen = if tests.is_empty() {
         outputs.into_iter().map(|o| o.1).collect::<Vec<_>>()
     } else {
@@ -4997,11 +5015,24 @@ fn odds(m: &std::collections::BTreeMap<String, f64>) -> String {
 ///
 /// The tracker or the pack refusing the ballot or the forecast.
 pub fn cast_jev(name: &str, issue: &str, b: &jev::Ballot) -> Result<()> {
-    let p = b.probabilities.get(&b.choice).copied().unwrap_or(b.confidence);
+    let p = b
+        .probabilities
+        .get(&b.choice)
+        .copied()
+        .unwrap_or(b.confidence);
     let p = format!("{:.3}", p.clamp(0.01, 1.0));
     run_captured_as(
         "vissue",
-        &["vote", issue, "--for", &b.choice, "--used", "none", "--confidence", &p],
+        &[
+            "vote",
+            issue,
+            "--for",
+            &b.choice,
+            "--used",
+            "none",
+            "--confidence",
+            &p,
+        ],
         Some(name),
     )?;
     write_prediction(issue, name, &serde_json::to_string(&b.forecast)?)?;
@@ -5089,7 +5120,12 @@ pub fn panel_jev(issue: &str, out: &Path) -> Result<String> {
     let rows: Vec<String> = personas
         .iter()
         .zip(&ballots)
-        .map(|(p, b)| format!("  {}  {} at confidence {:.2}", p.name, b.choice, b.confidence))
+        .map(|(p, b)| {
+            format!(
+                "  {}  {} at confidence {:.2}",
+                p.name, b.choice, b.confidence
+            )
+        })
         .collect();
     let mut lines = Vec::new();
     if jev_panel_stands(&ballots) {
@@ -11713,9 +11749,15 @@ mod tests {
         };
         let plain = call("add the timeline verb", "verdict-1");
         assert!(decision_nudge_as(&plain, None).is_none(), "no cue word");
-        assert!(decision_nudge_as(&plain, Some(true)).is_some(), "judged a choice");
+        assert!(
+            decision_nudge_as(&plain, Some(true)).is_some(),
+            "judged a choice"
+        );
         let asked = call("should we seal with age or gpg?", "verdict-2");
-        assert!(decision_nudge_as(&asked, Some(false)).is_none(), "judged not a choice");
+        assert!(
+            decision_nudge_as(&asked, Some(false)).is_none(),
+            "judged not a choice"
+        );
         let (key, _) = correction_nudge_as(&plain, Some(true)).expect("judged a correction");
         assert_eq!(key, "correction:judged");
         assert!(correction_nudge_as(&plain, Some(false)).is_none());
@@ -12893,7 +12935,10 @@ mod tests {
         };
         assert!(jev_panel_stands(&[b("age", 0.95), b("age", 0.9)]));
         assert!(!jev_panel_stands(&[b("age", 0.95), b("gpg", 0.9)]), "split");
-        assert!(!jev_panel_stands(&[b("age", 0.95), b("age", 0.6)]), "one unsure");
+        assert!(
+            !jev_panel_stands(&[b("age", 0.95), b("age", 0.6)]),
+            "one unsure"
+        );
         assert!(!jev_panel_stands(&[]));
     }
 
@@ -12919,9 +12964,15 @@ mod tests {
 
     #[test]
     fn options_come_from_a_line_or_its_bullets() {
-        assert_eq!(issue_options("Why.\nOptions: age, gpg\n"), vec!["age", "gpg"]);
+        assert_eq!(
+            issue_options("Why.\nOptions: age, gpg\n"),
+            vec!["age", "gpg"]
+        );
         assert_eq!(issue_options("Options:\n- a\n- b\n\nmore"), vec!["a", "b"]);
-        assert!(issue_options("Options: only").is_empty(), "one option is no vote");
+        assert!(
+            issue_options("Options: only").is_empty(),
+            "one option is no vote"
+        );
         assert!(issue_options("no options").is_empty());
     }
 

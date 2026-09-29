@@ -589,7 +589,10 @@ fn main() -> Result<()> {
                 let name = as_persona.as_deref().unwrap_or_default();
                 match ljos_cli::jev_vote(name, &issue)? {
                     ljos_cli::JevVote::Cast(b) => {
-                        println!("{name}: Jev cast {} at confidence {:.2}", b.choice, b.confidence);
+                        println!(
+                            "{name}: Jev cast {} at confidence {:.2}",
+                            b.choice, b.confidence
+                        );
                         print!("{}", ljos_cli::persist_tracker(&issue, "ballot cast"));
                     }
                     ljos_cli::JevVote::Escalated(b) => {
@@ -598,7 +601,10 @@ fn main() -> Result<()> {
                              Start a subagent from `ljos brief {name} {issue}`",
                             b.choice, b.confidence, b.escalate_below
                         );
-                        print!("{}", ljos_cli::persist_tracker(&issue, "escalated a ballot"));
+                        print!(
+                            "{}",
+                            ljos_cli::persist_tracker(&issue, "escalated a ballot")
+                        );
                     }
                 }
             }
@@ -779,7 +785,10 @@ fn main() -> Result<()> {
                     }
                 }
                 if let Some(reason) = ljos_cli::stop_audit(&input, stop_active) {
-                    println!("{}", serde_json::json!({"decision": "block", "reason": reason}));
+                    println!(
+                        "{}",
+                        serde_json::json!({"decision": "block", "reason": reason})
+                    );
                 }
                 return Ok(());
             }
@@ -788,7 +797,10 @@ fn main() -> Result<()> {
             // one more round.
             if call.event == "Stop" && call.shape != ljos_cli::HookShape::Context {
                 if let Some(reason) = ljos_cli::stop_audit(&input, stop_active) {
-                    println!("{}", serde_json::json!({"decision": "block", "reason": reason}));
+                    println!(
+                        "{}",
+                        serde_json::json!({"decision": "block", "reason": reason})
+                    );
                     return Ok(());
                 }
             }
