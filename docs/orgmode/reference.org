@@ -27,12 +27,12 @@
 | =playbook ISSUE NAME= | pack | bind a recipe to the issue and copy its full body; the name is a tracker =playbook:= note until finish or release |
 | =playbooks= | pack | the closed set sit, arena, land, company-panel, overnight; pack latest per name, shipped seed when missing |
 | =brief NAME ISSUE= | pack, tracker | what a subagent playing the persona starts from: view, the bound playbook's full recipe, five named principles, the arena rubric, what the seat knows on its domains, the working set |
-| =panel ISSUE [--out DIR]= | pack, tracker | one brief per persona whose domains the issue speaks to as =DIR/<name>.md=, then the settle line; refused until a playbook is bound |
+| =panel ISSUE [--out DIR] [--jev]= | pack, tracker | one brief per persona whose domains the issue speaks to as =DIR/<name>.md=, then the settle line; refused until a playbook is bound. =--jev= asks Jev for every ballot first and casts them only when every seat is sure and all agree; otherwise it writes the briefs |
 | =learn ID --outcome OPTION [--rule record\vert hedge] [--beta B] [--share S]= | tracker, pack | reweigh voters by what turned out right: by default each voter's record of hits and misses as log-odds weights; =hedge= shrinks refuted voters by =B= with =S= recovery |
 | =evidence ACCESSION= / =current ACCESSION= | deed store | intact; still the tip |
 | =deed ID [--add ACCESSION]= | tracker | cite a deed on a node, or list citations |
 | =recall ID= | tracker | the working set |
-| =vote ID [--for OPTION] [--as PERSONA]= | tracker | cast, as the seat or as a persona, or read the tally |
+| =vote ID [--for OPTION] [--as PERSONA] [--jev]= | tracker | cast, as the seat or as a persona, or read the tally. =--as NAME --jev= asks Jev for the persona's ballot: cast with the option's probability and a forecast at confidence 0.8 or above, noted and left for a subagent under it |
 | =predict ID --expect OPTION\vert JSON [--as PERSONA]= | pack | forecast the others' shares; two or more and =consensus= names the surprisingly popular answer |
 | =rule PATTERN [--verdict deny\vert ask] --why TEXT= | pack | argv law: a glob over the command line the hook and =policy= enforce |
 | =consensus ID= | consensus, tracker | settle under the pack's rows that apply to the issue, with every persona's anchor; an issue tagged =broad= runs bounded confidence |
@@ -46,7 +46,7 @@
 | =findings STATE [--remember] [--all] [--issue I]= | pack, deed store, tracker | the typed findings of an eb-stack campaign state, one per line: id, status, class/disposition, stage, recipe, the fix or the summary; =--remember= writes one lesson per finding a person or a seat resolved (recipe, step, error line, fix), under the recipe's name, its package and the class; =--all= takes the ones a later attempt superseded too; =--issue= cites the state file as a deed on the issue |
 | =handover --out DIR [--project P]... [--issue I]... [--to user@host:path]= | all | pack, seal, sign; =--to= copies the bag to another seat over ssh |
 | =receive DIR [--since BRIDGE] [--import]= | all | check, and import the atoms |
-| =doctor= | all | which habitats answer, who is sitting, and whether the runners named in the runners file are onboarded |
+| =doctor= | all | which habitats answer, who is sitting, and whether the runners named in the runners file are onboarded; with =jev.toml= present, a =jev= row with the month's calls, cached answers and spend |
 | =seat= | none | who is sitting: the seat this runner votes under, the holder this conversation claims under, and where the names came from |
 | =protocol= | none | print the sitting protocol |
 | =onboard [--harness NAME] [--dry-run] [--example]= | runner | alone, print the one =mcpServers= entry any runner takes; with a runner named in =~/.config/ljos/harnesses.toml=, register =ljos-mcp= with it and install the protocol as its skill |
