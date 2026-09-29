@@ -2,7 +2,7 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
-## Unreleased
+## 0.18.0 (2026-09-30)
 
 - A subagent's stop hook names only the issue its own conversation holds.
   A hold written from a shell whose runner the process tree had lost
