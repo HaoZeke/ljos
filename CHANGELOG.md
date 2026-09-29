@@ -2,7 +2,7 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
-## Unreleased
+## 0.17.0 (2026-09-29)
 
 - With Jev on, `Stop` and `SubagentStop` audit the turn once from the
   runner's transcript. A final message that claims done beside a red
@@ -174,8 +174,6 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 - Doctor checks that the installed tracker accepts evidence citations and
   forecast confidence on ballots. An incompatible vote command fails the
   required tracker row, even when its version is listed in the registry.
-
-## 0.17.0 (2026-09-21)
 
 - `ljos hud` opens the summonable icedtea pane (`ljos-hud`, a workspace
   member): due, claims, trust canvas, island, and the deed rail. The
