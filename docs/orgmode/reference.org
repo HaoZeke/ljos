@@ -6,9 +6,9 @@
 | Verb | Habitat | Does |
 |---+---+---|
 | =sitting ISSUE [--assignee NAME] [--cards DIR] [--playbook NAME] [--anyway]= | all | open a sitting: doctor, cards, due, island, playbook, recall, timeline, claim; stops at the first store down; the name defaults to this conversation's holder (=ljos seat=); =--playbook= copies a recipe before recall; absent, title-match else =sit=; the name is a tracker =playbook:= note until finish or release |
-| =finish ISSUE [--status S] [--lesson TEXT] [--outcome OPTION] [--beta B] [--close]= | all | close a sitting: remember, fire the island, complete, learn; =--close= closes the ticket when the work is accepted |
+| =finish ISSUE [--status S] [--lesson TEXT] [--outcome OPTION] [--beta B] [--gen G] [--assignee NAME] [--close]= | all | close a sitting: remember, fire the island, complete, learn; =--gen= names the claim's generation (absent, the live one; a stale one is refused); =--assignee= names the holder (absent, this conversation's holder); =--close= closes the ticket only when the work is accepted, else the ticket stays |
 | =calibrate -p PROJECT [--rounds N]= | consensus, pack | trust rows from the project's voting history (Dawid-Skene accuracy) |
-| =remember TEXT [--as PERSONA]= | pack | one lesson, stored as written; as a persona, it carries that persona's entity and opens its next brief |
+| =remember TEXT [--as PERSONA] [--transient\vert--standing]= | pack | one lesson, stored as written; as a persona, it carries that persona's entity and opens its next brief; =--transient= (the default) stores an episode that is kept and is not a refresher; =--standing= stores a standing rule at once, with no review |
 | =prefer TEXT= | pack | one standing preference |
 | =forget ID [--why DEED]= | pack | tombstone a claim, naming the deed that withdrew it |
 | =search QUERY [-n N] [--rerank] [--as-of TIME]= | pack | ranked claims with how many scorers named each and its age; =--rerank= scores the top hits with the writer's cross-encoder; =--as-of= asks the pack as it stood then |
@@ -33,18 +33,19 @@
 | =deed ID [--add ACCESSION]...= | tracker | cite one or more deeds on a node (repeat =--add=), or list citations |
 | =claims [ARGS]= | tracker | who holds what: =vissue claims= with its flags (=--by NAME=, =--json=) |
 | =recall ID= | tracker | the working set |
-| =vote ID [--for OPTION] [--as PERSONA] [--jev]= | tracker | cast, as the seat or as a persona, or read the tally. =--as NAME --jev= asks Jev for the persona's ballot: cast with the option's probability and a forecast at confidence 0.8 or above, noted and left for a subagent under it |
+| =vote ID [--for OPTION] [--confidence P] [--used ACCESSIONS\vert none] [--expect OPTION\vert JSON] [--as PERSONA] [--jev] [--withdraw]= | tracker | cast, as the seat or as a persona, or read the tally; =--confidence= is a probability in (0, 1]; =--used= lists the deed accessions the ballot used, comma-separated, or =none=, and is required with =--for=; =--expect= records the forecast of the others on the same command; =--withdraw= takes back the ballot and its forecast, and the logbook keeps what it was. =--as NAME --jev= asks Jev for the persona's ballot: cast with the option's probability and a forecast at confidence 0.8 or above, noted and left for a subagent under it |
 | =predict ID --expect OPTION\vert JSON [--as PERSONA]= | pack | forecast the others' shares; two or more and =consensus= names the surprisingly popular answer |
 | =rule PATTERN [--verdict deny\vert ask] --why TEXT= | pack | argv law: a glob over the command line the hook and =policy= enforce |
 | =consensus ID= | consensus, tracker | settle under the pack's rows that apply to the issue, with every persona's anchor; an issue tagged =broad= runs bounded confidence |
 | =claim ID [--assignee NAME]= | claim graph | a session node for a tracker id; a busy refusal names what the name still holds; a node this name holds is a sitting resumed |
 | =release ID [--assignee NAME]= | claim graph | hand the session node back unfinished: ready, generation moved |
-| =complete ID [--status done\vert failed\vert cancelled]= | claim graph | finish the session node |
+| =complete ID [--status done\vert failed\vert cancelled] [--gen G] [--assignee NAME]= | claim graph | finish the session node; does not close the ticket; =--gen= and =--assignee= as on =finish= |
 | =cards [--dir DIR]= | cards | print =USER.md= and =MEMORY.md= |
 | =policy ARGV...= | policy, pack | the line as it would run, the TCB verdict if =ljos-policyd= answered, then a matching pack rule, then what the pack knows that bears on it |
 | =hook [--limit N]= | policy, pack | hook JSON or argv on stdin; on =PreToolUse= the TCB and pack rules, a deny is =permissionDecision=; on a prompt the hits scoring at least 0.6 of the best that two scorers named, preferences first then lessons oldest first, each with its age, five at most, each once per runner session |
 | =bump-plan BUNDLE --project P --parent I [--generation G] [--dry-run]= | tracker | one child issue per module the bundle's lock builds, under =I=, blocked by the modules built before it along the SBOM's edges; ids are a hash of module and generation, so a rerun holds what exists and adds what is missing; =--dry-run= prints the rows |
 | =findings STATE [--remember] [--all] [--issue I]= | pack, deed store, tracker | the typed findings of an eb-stack campaign state, one per line: id, status, class/disposition, stage, recipe, the fix or the summary; =--remember= writes one lesson per finding a person or a seat resolved (recipe, step, error line, fix), under the recipe's name, its package and the class; =--all= takes the ones a later attempt superseded too; =--issue= cites the state file as a deed on the issue |
+| =sync [--key] [--import] [--export]= | tracker, pack | share the seat's memory across machines through the tracker repository: pull and take other machines' sealed logs, then write and push this machine's; =--key= prints this machine's age public key (made on first use) and stops; =--import= only pulls; =--export= only writes and pushes |
 | =handover --out DIR [--project P]... [--issue I]... [--to user@host:path]= | all | pack, seal, sign; =--to= copies the bag to another seat over ssh |
 | =receive DIR [--since BRIDGE] [--import]= | all | check, and import the atoms |
 | =doctor= | all | which habitats answer, who is sitting, and whether the runners named in the runners file are onboarded; with =jev.toml= present, a =jev= row with the month's calls, cached answers and spend |
@@ -79,7 +80,12 @@ when to call it.
 | =LJOS_CARDS_DIR= | the server's cards directory |
 | =LJOS_HUD_BIN= | path to =ljos-hud=; else sibling of =ljos=, then PATH |
 | =LJOS_HUD_SOCKET= | summon socket; else =$XDG_RUNTIME_DIR/ljos/hud.sock= |
+| =LJOS_TRACKER_GIT= | =commit= commits the ticket's =issues.org= without pushing; =off= skips the commit and push; unset, commit and push |
+| =LJOS_TRACKER_PUSH_WAIT= | seconds the tracker push after a claim or finish waits; 5 when unset |
 | =XDG_CONFIG_HOME= | where =ljos/harnesses.toml= is read from; =~/.config= when unset |
+| =XDG_STATE_HOME=, =XDG_CACHE_HOME=, =XDG_RUNTIME_DIR= | where the Jev state, cache and runtime key live (see Jev settings); =XDG_RUNTIME_DIR= also holds the hud socket and the seat records |
+
+=~/.config/ljos/env= is loaded for the keys above that the shell leaves unset.
 
 A runner's table in =harnesses.toml= may name =hooks=, a JSON settings
 file of the shape ={"hooks": {"<Event>": [{"matcher": "...", "hooks":
@@ -94,6 +100,50 @@ session together and clears the session's record. The hook reads the runner's JS
 or nothing when the pack holds nothing on the cue. On =PreToolUse= a TCB
 or pack deny is =permissionDecision= =deny= and blocks. Plain text on
 stdin is an argv line and answered in plain lines.
+
+| Event | The hook does |
+|---+---|
+| =UserPromptSubmit= | answers with the memories the prompt activates, preferences first, each once per runner session; with Jev on, asks which claims bear on the prompt and whether it corrects the agent or puts a choice |
+| =SessionEnd= | fires the memories injected during the session together and clears the session's record |
+| =PostToolUse= | emits the held prompt note once, on the first tool result, for a runner that discards prompt-hook stdout (grok delivers this event) |
+| =PreToolUse= | applies the TCB and pack rules to the command (matcher =Bash=); a deny blocks |
+| =Stop= | speaks only when the turn ran no tool; with Jev on, audits the turn once from the runner's transcript |
+| =SubagentStop= | names the issue the subagent's conversation holds and asks for the ballot on a decision; with Jev on, audits the turn once |
+
+* Sync files
+
+| File | Holds |
+|---+---|
+| =.ljos/sync.toml= (in the tracker repository) | the repository's scope and its age recipients; a =[projects]= table sends one project's lessons to another scope |
+| =.ljos/atoms/= | one sealed log per machine |
+
+* Jev settings
+
+=~/.config/ljos/jev.toml=. The file is absent or =enabled = false=: Jev is off.
+
+| Key | Default | Meaning |
+|---+---+---|
+| =enabled= | =false= | turn Jev on; the call sends the prompt and claims off the machine |
+| =key_file= | unset | file holding the key, one line, mode 0600 |
+| =key_cmd= | unset | command that prints the key on its first line, as an argv list; asked once per login |
+| =model= | =jev-1.13.0= | model name; =typesafe/jev-1.13= on OpenRouter |
+| =budget_ms= | 2000 | how long the hook waits for the answer |
+| =endpoint= | =https://api.typesafe.ai/v1/systemone= | API endpoint; =https://openrouter.ai/api/alpha/decisions= for OpenRouter |
+| =monthly_usd= | 4.0 | the month's spend in US dollars past which the hook stops asking |
+| =min_words= | 4 | a prompt with fewer words is skipped |
+| =min_candidates= | 2 | fewer candidate claims than this is skipped |
+| =usd_per_mtok_in= | 0.042 | US dollars per million input tokens, for an API whose answer carries no cost |
+| =bears_at= | 0.5 | probability at which a claim bears on the prompt |
+| =cue_at= | 0.5 | probability at which the prompt counts as a correction or a choice |
+| =escalate_below= | 0.8 | a persona ballot under this confidence goes to a subagent |
+| =cache_days= | 7 | days an identical request is answered from the cache; 0 turns it off |
+
+| Path | Holds |
+|---+---|
+| =$XDG_STATE_HOME/ljos/jev-cost.toml= | the month's calls and spend |
+| =$XDG_STATE_HOME/ljos/jev-log.jsonl= | every Jev answer |
+| =$XDG_CACHE_HOME/ljos/jev= | the answer cache |
+| =$XDG_RUNTIME_DIR/ljos/jev-key= | the key from =key_cmd=, mode 0600 |
 
 * The learning rules
 

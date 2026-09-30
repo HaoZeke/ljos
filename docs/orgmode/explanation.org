@@ -287,11 +287,12 @@ rows included. Learning travels with its evidence.
 
 * Model and runner agnostic, human readable
 
-Nothing in the seat calls a model. The stores are files a person can read:
+The seat runs without a model unless =jev.toml= enables Jev, an opt-in call
+that judges a few questions. The stores are files a person can read:
 Org headings, one JSON object a line, a content-addressed directory, a
 Cap'n Proto snapshot. Any agent that can run a command or call a Model Context Protocol tool
 can work the seat, and a person can do the same from a shell or an editor.
-A read-only viewer over the habitats is the open work.
+=ljos hud= is the read-only viewer over due claims, holds and trust.
 
 The seat does not know the runners. It knows one thing every runner
 does: it connects, and says its name. =ljos-mcp= takes that name at

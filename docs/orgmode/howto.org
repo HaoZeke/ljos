@@ -120,8 +120,7 @@ $ echo '{"hook_event_name":"PreToolUse","tool_input":{"command":"git push --forc
 text, and emits it on =PostToolUse=. The page [[file:grok-build.org][Grok Build]]
 is the install.
 
-A
-policy daemon does the same with the argv:
+A policy daemon does the same with the argv:
 
 #+begin_src console
 $ echo "cargo test --release" | ljos hook
@@ -544,18 +543,18 @@ $ ljos-consensus settle --issue ID --susceptibility 0.8 --trust '[["alice","caro
 
 #+begin_src text
 $ ljos doctor
-ok  vissue  ~/.local/bin/vissue
-ok  deedar  ~/.local/bin/deedar
-ok  claimdag  ~/.local/bin/claimdag
-ok  packset  ~/.local/bin/packset
-ok  packsetd  ~/.local/bin/packsetd
-ok  ljos-consensus  ~/.local/bin/ljos-consensus
-ok  ljos-mcp  ~/.local/bin/ljos-mcp
-ok  pack  http://127.0.0.1:8761 workspace git:github.com/leidarljos/ljos
-ok  host key  ~/.config/deedar/host.key (32-byte seed)
-ok  deed store  size=34 root=3d8e015509923724097e9f33d3a044fe0764f17bd5387769530ed5bfb6ada
-ok  tracker  vissue 0.10.0
-ok  claim graph  a4a8fa1b8f05d259877be54da99f06bc  claimed  task  69f91712  gen=2  ljos-a6
+ok	ljos	/path/to/ljos  0.18.0  crates.io (cached) 0.18.0
+ok	vissue	/path/to/vissue  0.18.0  crates.io (cached) 0.18.0
+ok	packsetd	/path/to/packsetd  0.11.0  crates.io (cached) 0.11.0
+ok	seat	<runner>, holding as sess-<hash> (from this conversation's record)
+ok	pack	http://127.0.0.1:PORT workspace seat
+ok	memory	520 live of 20000
+ok	host key	/path/to/host.key (32-byte seed)
+ok	deed store	size=150 root=<hash> ed25519 <hash>
+ok	tracker	vissue 0.18.0 root=/path/to/tracker prefix=Issues; 0 unpushed
+ok	claim graph	<hash>  claimed  task  <hash>  gen=2  ISSUE
+ok	runner mcp	<runner>: ljos registered
+ok	jev	on  jev-1.13.0  88 calls, 0 cached  $0.0035 of $4.00 this month
 #+end_src
 
 Exit 1 when the tracker, the deed store, or the pack does not answer. The
