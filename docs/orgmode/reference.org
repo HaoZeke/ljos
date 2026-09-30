@@ -124,11 +124,13 @@ stdin is an argv line and answered in plain lines.
 | Key | Default | Meaning |
 |---+---+---|
 | =enabled= | =false= | turn Jev on; the call sends the prompt and claims off the machine |
+| =backend= | =jev= | which judge answers: =jev=, =chat= (one JSON-mode chat completion at =endpoint= plus =/chat/completions=, model =model=) or =command= (the =command= argv, request on stdin, answers on stdout) |
+| =command= | unset | the argv of the =command= backend; it prints ={"answers": ...}= inside =budget_ms= |
 | =key_file= | unset | file holding the key, one line, mode 0600 |
 | =key_cmd= | unset | command that prints the key on its first line, as an argv list; asked once per login |
 | =model= | =jev-1.13.0= | model name; =typesafe/jev-1.13= on OpenRouter |
 | =budget_ms= | 2000 | how long the hook waits for the answer |
-| =endpoint= | =https://api.typesafe.ai/v1/systemone= | API endpoint; =https://openrouter.ai/api/alpha/decisions= for OpenRouter |
+| =endpoint= | =https://api.typesafe.ai/v1/systemone= | API endpoint; =https://openrouter.ai/api/alpha/decisions= for OpenRouter; the base URL (=.../v1=) for =chat= |
 | =monthly_usd= | 4.0 | the month's spend in US dollars past which the hook stops asking |
 | =min_words= | 4 | a prompt with fewer words is skipped |
 | =min_candidates= | 2 | fewer candidate claims than this is skipped |

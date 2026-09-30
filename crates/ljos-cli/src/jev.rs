@@ -9,6 +9,13 @@
 //! because the call sends the prompt and the candidate claims off the
 //! machine; with no file, no key, a failure or a spent budget, the hook
 //! keeps its local path.
+//!
+//! The same questions can go to another judge: `backend = "chat"` sends
+//! them as one JSON-mode chat request to any chat-completions endpoint (a
+//! hosted model, a local llama-server), and `backend = "command"` hands the
+//! request to an argv on stdin and reads the answers from its stdout, so a
+//! harness on the machine can be the judge. Both answer in the shape Jev
+//! does, so the parsers, the cache, the ledger and the callers are shared.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -16,12 +23,51 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+/// Which judge answers the questions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Backend {
+    /// Jev over TypeSafe's API or OpenRouter's Decisions API.
+    #[default]
+    Jev,
+    /// One JSON-mode chat completion on a chat-completions endpoint;
+    /// `endpoint` is the base URL and `model` the model name there.
+    Chat,
+    /// The `command` argv, given the request on stdin, answers on stdout.
+    Command,
+}
+
+impl Backend {
+    /// The name the doctor row and the log carry.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Jev => "jev",
+            Self::Chat => "chat",
+            Self::Command => "command",
+        }
+    }
+
+    /// Whether the backend needs a key at all.
+    #[must_use]
+    pub fn needs_key(self) -> bool {
+        self == Self::Jev
+    }
+}
+
 /// `~/.config/ljos/jev.toml`.
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Config {
     /// Off unless set: the call sends the prompt and claims off the machine.
     #[serde(default)]
     pub enabled: bool,
+    /// Which judge answers: `jev` (the default), `chat` or `command`.
+    #[serde(default)]
+    pub backend: Backend,
+    /// The argv of the `command` backend. It reads the request JSON on
+    /// stdin and prints `{"answers": ...}` on stdout inside `budget_ms`.
+    #[serde(default)]
+    pub command: Option<Vec<String>>,
     /// A file holding the key, one line, mode 0600.
     #[serde(default)]
     pub key_file: Option<String>,
@@ -215,8 +261,12 @@ pub fn config() -> Option<(Config, String)> {
     let key = match (&cfg.key_cmd, &cfg.key_file) {
         (Some(argv), _) => key_by_command(argv)?,
         (None, Some(file)) => key_from(&std::fs::read_to_string(expand(file)).ok()?)?,
-        (None, None) => return None,
+        (None, None) if cfg.backend.needs_key() => return None,
+        (None, None) => String::new(),
     };
+    if cfg.backend == Backend::Command && cfg.command.as_ref().is_none_or(Vec::is_empty) {
+        return None;
+    }
     Some((cfg, key))
 }
 
@@ -312,22 +362,27 @@ pub fn parse(body: &Value, candidates: usize) -> Option<Judgment> {
     })
 }
 
+/// What names the judge in the cache key: the endpoint, or the argv.
+fn judge_name(cfg: &Config) -> String {
+    match cfg.backend {
+        Backend::Jev | Backend::Chat => format!("{}/{}", cfg.endpoint, cfg.model),
+        Backend::Command => cfg.command.as_deref().unwrap_or_default().join(" "),
+    }
+}
+
 /// Send one request inside the configured budget, record its cost and
 /// log its answers; the answers object, or `None` on any failure.
 fn post(cfg: &Config, key: &str, body: Value, kind: &str, about: Value) -> Option<Value> {
-    let request = format!("{}\n{body}", cfg.endpoint);
+    let request = format!("{}\n{body}", judge_name(cfg));
     if let Some(reply) = cached(&request, cfg.cache_days) {
         count("cached");
         return Some(reply);
     }
-    let reply: Value = ureq::post(&cfg.endpoint)
-        .timeout(Duration::from_millis(cfg.budget_ms))
-        .set("Authorization", &format!("Bearer {key}"))
-        .set("Content-Type", "application/json")
-        .send_json(body)
-        .ok()?
-        .into_json()
-        .ok()?;
+    let reply = match cfg.backend {
+        Backend::Jev => jev_post(cfg, key, body)?,
+        Backend::Chat => chat_post(cfg, key, &body)?,
+        Backend::Command => command_post(cfg, &body)?,
+    };
     let answers = reply.get("answers")?.clone();
     let cost = cost_of(&reply, cfg.usd_per_mtok_in);
     record_cost(cost);
@@ -337,12 +392,165 @@ fn post(cfg: &Config, key: &str, body: Value, kind: &str, about: Value) -> Optio
     log(&serde_json::json!({
         "ts": crate::now_utc(),
         "kind": kind,
+        "backend": cfg.backend.name(),
         "model": cfg.model,
         "about": about,
         "answers": answers,
         "cost": cost,
     }));
     Some(reply)
+}
+
+/// The request as Jev takes it: the body as is, the key as a bearer.
+fn jev_post(cfg: &Config, key: &str, body: Value) -> Option<Value> {
+    ureq::post(&cfg.endpoint)
+        .timeout(Duration::from_millis(cfg.budget_ms))
+        .set("Authorization", &format!("Bearer {key}"))
+        .set("Content-Type", "application/json")
+        .send_json(body)
+        .ok()?
+        .into_json()
+        .ok()
+}
+
+/// What a chat model is told about the answer shape, so its reply reads
+/// as Jev's does.
+const CHAT_SYSTEM: &str = "You judge questions about a state and answer with one JSON object and nothing else: \
+{\"answers\": {<question name>: <answer>, ...}}, one answer per question, under the question's name. \
+A question of type \"noul\" takes {\"noul\": p}: p is the probability, from 0 to 1, that the statement in its \
+instructions is true, judged by its criteria. A question of type \"choice\" takes {\"choice\": <one key of its \
+criteria>, \"confidence\": p, \"probabilities\": {<key>: p, ...}} over every key, summing to 1. \
+Answer every question. Calibrate: 0.5 means you do not know.";
+
+/// A Jev request as one chat completion: the state and the questions in
+/// the user turn, the answer shape in the system turn, JSON mode on.
+#[must_use]
+pub fn chat_request(model: &str, body: &Value) -> Value {
+    let state = body["state"].as_str().unwrap_or("");
+    let questions = serde_json::to_string_pretty(&body["questions"]).unwrap_or_default();
+    serde_json::json!({
+        "model": model,
+        "temperature": 0,
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {"role": "system", "content": CHAT_SYSTEM},
+            {"role": "user", "content": format!("State:\n{state}\n\nQuestions:\n{questions}\n")}
+        ]
+    })
+}
+
+/// The JSON object in a chat reply's content, with a code fence stripped.
+fn content_json(reply: &Value) -> Option<Value> {
+    let text = reply["choices"][0]["message"]["content"].as_str()?;
+    let text = text.trim();
+    let text = text
+        .strip_prefix("```json")
+        .or_else(|| text.strip_prefix("```"))
+        .and_then(|t| t.strip_suffix("```"))
+        .map_or(text, str::trim);
+    serde_json::from_str(text).ok().or_else(|| {
+        let start = text.find('{')?;
+        let end = text.rfind('}')?;
+        serde_json::from_str(&text[start..=end]).ok()
+    })
+}
+
+/// The answers a chat model gave, in Jev's shape: a bare number or a
+/// boolean under a `noul` question becomes `{"noul": p}`, and a `choice`
+/// answer gets the confidence and probabilities it left out. A question
+/// with no answer stays missing, so the parser refuses the reply.
+#[must_use]
+pub fn chat_answers(body: &Value, content: &Value) -> Value {
+    let given = content.get("answers").unwrap_or(content);
+    let mut answers = serde_json::Map::new();
+    let Some(questions) = body["questions"].as_object() else {
+        return Value::Object(answers);
+    };
+    for (name, q) in questions {
+        let Some(a) = given.get(name) else { continue };
+        let kind = q["type"].as_str().unwrap_or("noul");
+        let fixed = if kind == "choice" {
+            let Some(choice) = a["choice"].as_str().or_else(|| a.as_str()) else {
+                continue;
+            };
+            let mut probs: serde_json::Map<String, Value> =
+                a["probabilities"].as_object().cloned().unwrap_or_default();
+            let confidence = a["confidence"]
+                .as_f64()
+                .or_else(|| probs.get(choice)?.as_f64())
+                .unwrap_or(1.0);
+            if probs.is_empty() {
+                probs.insert(choice.to_string(), Value::from(confidence));
+            }
+            serde_json::json!({
+                "type": "choice",
+                "choice": choice,
+                "confidence": confidence,
+                "probabilities": probs,
+            })
+        } else {
+            let p = a["noul"]
+                .as_f64()
+                .or_else(|| a.as_f64())
+                .or_else(|| a.as_bool().map(|b| if b { 1.0 } else { 0.0 }));
+            let Some(p) = p else { continue };
+            serde_json::json!({"type": "noul", "noul": p.clamp(0.0, 1.0)})
+        };
+        answers.insert(name.clone(), fixed);
+    }
+    Value::Object(answers)
+}
+
+/// One chat completion at `{endpoint}/chat/completions`, read back into
+/// Jev's shape with the prompt tokens as the usage.
+fn chat_post(cfg: &Config, key: &str, body: &Value) -> Option<Value> {
+    let url = format!("{}/chat/completions", cfg.endpoint.trim_end_matches('/'));
+    let mut req = ureq::post(&url)
+        .timeout(Duration::from_millis(cfg.budget_ms))
+        .set("Content-Type", "application/json");
+    if !key.is_empty() {
+        req = req.set("Authorization", &format!("Bearer {key}"));
+    }
+    let reply: Value = req
+        .send_json(chat_request(&cfg.model, body))
+        .ok()?
+        .into_json()
+        .ok()?;
+    let content = content_json(&reply)?;
+    Some(serde_json::json!({
+        "answers": chat_answers(body, &content),
+        "usage": {"input_tokens": reply["usage"]["prompt_tokens"].as_f64().unwrap_or(0.0)},
+    }))
+}
+
+/// The command backend: the request on stdin, `{"answers": ...}` on
+/// stdout, inside the budget under `timeout`, as the key command runs.
+fn command_post(cfg: &Config, body: &Value) -> Option<Value> {
+    use std::io::Write;
+    let argv = cfg.command.as_deref()?;
+    let (prog, args) = argv.split_first()?;
+    let secs = (cfg.budget_ms.div_ceil(1000)).max(1);
+    let mut child = std::process::Command::new("timeout")
+        .arg(secs.to_string())
+        .arg(prog)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    child
+        .stdin
+        .take()?
+        .write_all(body.to_string().as_bytes())
+        .ok()?;
+    let out = child.wait_with_output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let content: Value = serde_json::from_slice(&out.stdout).ok()?;
+    let answers = chat_answers(body, &content);
+    (!answers.as_object()?.is_empty()).then(|| serde_json::json!({"answers": answers}))
 }
 
 /// Ask Jev about one prompt, inside the configured budget.
@@ -699,7 +907,8 @@ pub fn doctor_row() -> Option<crate::Habitat> {
         Ok(cfg) => {
             let spent = month_cost().unwrap_or(0.0);
             let head = format!(
-                "{}  {} calls, {} cached  ${spent:.4} of ${:.2} this month",
+                "{} {}  {} calls, {} cached  ${spent:.4} of ${:.2} this month",
+                cfg.backend.name(),
                 cfg.model,
                 month_calls(),
                 month_count("cached"),
@@ -708,10 +917,12 @@ pub fn doctor_row() -> Option<crate::Habitat> {
             if spent >= cfg.monthly_usd {
                 (format!("capped  {head}"), true)
             } else if config().is_none() {
-                (
-                    "on, but the key file or command gave no key".to_string(),
-                    false,
-                )
+                let why = if cfg.backend == Backend::Command {
+                    "on, but no command is set"
+                } else {
+                    "on, but the key file or command gave no key"
+                };
+                (why.to_string(), false)
             } else {
                 (format!("on  {head}"), true)
             }
@@ -795,6 +1006,82 @@ mod tests {
         assert_eq!(cfg.budget_ms, 2000);
         assert_eq!(cfg.min_candidates, 2);
         unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
+    }
+
+    #[test]
+    fn a_chat_reply_is_read_in_jev_shape() {
+        let body = request("m", "fix the ci", &["alpha claim", "beta claim"]);
+        let chat = chat_request("m", &body);
+        assert_eq!(chat["response_format"]["type"], "json_object");
+        let user = chat["messages"][1]["content"].as_str().unwrap();
+        assert!(user.contains("[1] beta claim") && user.contains("\"bears_1\""));
+        let content = serde_json::json!({"answers": {
+            "bears_0": 0.9,
+            "bears_1": {"noul": 0.1},
+            "correction": false,
+            "choice": {"noul": 0.7}
+        }});
+        let reply = serde_json::json!({"answers": chat_answers(&body, &content)});
+        let j = parse(&reply, 2).unwrap();
+        assert_eq!(j.bears, vec![0.9, 0.1]);
+        assert!((j.correction).abs() < 1e-9 && (j.choice - 0.7).abs() < 1e-9);
+        let short = serde_json::json!({"answers": {"bears_0": 0.9}});
+        let reply = serde_json::json!({"answers": chat_answers(&body, &short)});
+        assert!(
+            parse(&reply, 2).is_none(),
+            "a missing answer refuses the reply"
+        );
+        let fenced = serde_json::json!({"choices": [{"message": {"content":
+            "```json\n{\"answers\": {\"bears_0\": 1}}\n```"}}]});
+        assert_eq!(content_json(&fenced).unwrap()["answers"]["bears_0"], 1);
+    }
+
+    #[test]
+    fn a_chat_ballot_fills_what_the_model_left_out() {
+        let options = vec!["A".to_string(), "B".to_string()];
+        let body = ballot_request("m", "brief", &options);
+        let content = serde_json::json!({"answers": {
+            "ballot": {"choice": "A", "probabilities": {"A": 0.7, "B": 0.3}},
+            "forecast": "B"
+        }});
+        let reply = serde_json::json!({"answers": chat_answers(&body, &content)});
+        let b = parse_ballot(&reply, &options).unwrap();
+        assert_eq!(b.choice, "A");
+        assert!(
+            (b.confidence - 0.7).abs() < 1e-9,
+            "confidence from the chosen probability"
+        );
+        assert_eq!(
+            b.forecast.get("B").copied(),
+            Some(1.0),
+            "a bare choice is a sure one"
+        );
+    }
+
+    #[test]
+    fn the_command_backend_answers_from_stdout_and_needs_no_key() {
+        let cfg: Config = toml::from_str(
+            "enabled = true\nbackend = \"command\"\ncommand = [\"sh\", \"-c\", \
+             \"cat >/dev/null; echo '{\\\"answers\\\": {\\\"bears_0\\\": 0.8, \\\"correction\\\": 0, \\\"choice\\\": 0.2}}'\"]\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.backend, Backend::Command);
+        assert!(!cfg.backend.needs_key());
+        let body = request("m", "fix the ci", &["alpha claim"]);
+        let reply = command_post(&cfg, &body).unwrap();
+        let j = parse(&reply, 1).unwrap();
+        assert_eq!(j.bears, vec![0.8]);
+        let silent: Config = toml::from_str(
+            "enabled = true\nbackend = \"command\"\ncommand = [\"sh\", \"-c\", \"cat >/dev/null; echo {}\"]\n",
+        )
+        .unwrap();
+        assert!(
+            command_post(&silent, &body).is_none(),
+            "no answer is a refusal"
+        );
+        let plain: Config = toml::from_str("enabled = true\n").unwrap();
+        assert_eq!(plain.backend, Backend::Jev, "the default judge is Jev");
+        assert!(plain.backend.needs_key());
     }
 
     #[test]

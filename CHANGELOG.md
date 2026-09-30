@@ -2,6 +2,17 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
+## Unreleased
+
+- `backend` in `jev.toml` names the judge for the seat's four judgments:
+  `jev` (the default), `chat` (one JSON-mode chat completion on any
+  chat-completions endpoint, hosted or a local llama-server) or
+  `command` (an argv given the request on stdin, answering on stdout,
+  so a harness on the machine can judge). The three request shapes, the
+  parsers, the cache, the cost ledger and the callers are shared; a chat
+  reply is read into Jev's shape, and a question left unanswered refuses
+  the reply. `ljos doctor` prints the backend before the model.
+
 ## 0.18.0 (2026-09-30)
 
 - A panel seats a persona matched only through an everyday title word

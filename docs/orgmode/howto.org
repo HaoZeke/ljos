@@ -191,6 +191,47 @@ The hook falls back to its local path on any of these: no file,
 =enabled = false=, no key, an error, or no answer inside =budget_ms=
 (2000).
 
+* Put the judgments to a local model or a harness
+
+The same four judgments go to any judge that answers in Jev's shape.
+=backend= in =jev.toml= picks it; the parsers, the cache, the ledger and
+the doctor row are shared, and every fallback above still applies.
+
+A chat-completions endpoint, hosted or a local llama-server, takes one
+JSON-mode chat completion per judgment set. =endpoint= is the base URL
+and =model= the name the server knows. A local server needs no key;
+=usd_per_mtok_in = 0= keeps the ledger honest for one that is free.
+
+#+begin_src toml
+enabled = true
+backend = "chat"
+endpoint = "http://127.0.0.1:8089/v1"
+model = "Qwen2.5-7B-Instruct"
+usd_per_mtok_in = 0
+budget_ms = 6000
+#+end_src
+
+A harness on the machine is the judge through =command=: an argv that
+reads the request JSON on stdin (=state=, and =questions=, each with a
+=type= of =noul= or =choice=, =instructions= and =criteria=) and prints
+={"answers": {...}}= on stdout inside =budget_ms=. A =noul= answer is
+={"noul": p}= or a bare number; a =choice= answer is ={"choice": KEY,
+"confidence": p, "probabilities": {...}}=, and a bare key stands for a
+sure one. A question with no answer refuses the whole reply, so the hook
+takes its local path rather than half a judgment.
+
+#+begin_src toml
+enabled = true
+backend = "command"
+command = ["/path/to/judge.sh"]
+budget_ms = 20000
+#+end_src
+
+The hook budget bounds the prompt path, so a harness that takes seconds
+suits ballots and the stop audit more than the prompt hook; =min_words=
+and =min_candidates= keep the prompt calls few. The log carries the
+=backend= name, and =ljos doctor= prints it before the model.
+
 * Give an agent the protocol without a runner
 
 #+begin_src console
