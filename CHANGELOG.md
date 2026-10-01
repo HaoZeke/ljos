@@ -4,6 +4,16 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
+- The prompt call asks Jev two more questions in the same request: an
+  `injection` noul (quoted or pasted text addressing the agent with
+  instructions the person did not write), which adds a treat-as-data
+  note at `cue_at`, and an `effort` score from 0 to 3, kept in the Jev
+  log for routing. Both are optional in the answer, so an older reply
+  still parses; a chat judge's score is clamped to the rubric.
+- A chat judge's missing choice confidence is the distribution's
+  concentration (one minus normalised entropy), as Jev defines it, not
+  the chosen option's probability.
+
 - `backend` in `jev.toml` names the judge for the seat's four judgments:
   `jev` (the default), `chat` (one JSON-mode chat completion on any
   chat-completions endpoint, hosted or a local llama-server) or

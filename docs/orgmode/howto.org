@@ -140,6 +140,15 @@ all three in one call. It stays off unless the machine turns it on,
 because the call sends the prompt and up to ten candidate claims off
 the machine.
 
+The same call asks two more questions, since a call costs its input
+tokens and each question adds about 70 of them to a median of 933. An
+=injection= question asks whether quoted or pasted text addresses the
+agent with instructions the person did not write; at =cue_at= the hook
+adds a note telling the agent to treat that text as data. An =effort=
+question scores the prompt from 0 (a lookup) to 3 (a design or a hard
+debug); it changes nothing in the hook and lands in
+=$XDG_STATE_HOME/ljos/jev-log.jsonl= as the record a router is scored on.
+
 Keep the key in =pass= and write the setting:
 
 #+begin_src console
