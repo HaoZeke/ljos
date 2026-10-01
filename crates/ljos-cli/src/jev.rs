@@ -475,9 +475,12 @@ pub fn chat_answers(body: &Value, content: &Value) -> Value {
             };
             let mut probs: serde_json::Map<String, Value> =
                 a["probabilities"].as_object().cloned().unwrap_or_default();
+            // Jev's confidence measures how concentrated the distribution
+            // is, not the chosen option's probability; a reply without it
+            // gets one minus the normalised entropy of its probabilities.
             let confidence = a["confidence"]
                 .as_f64()
-                .or_else(|| probs.get(choice)?.as_f64())
+                .or_else(|| concentration(&probs))
                 .unwrap_or(1.0);
             if probs.is_empty() {
                 probs.insert(choice.to_string(), Value::from(confidence));
@@ -499,6 +502,28 @@ pub fn chat_answers(body: &Value, content: &Value) -> Value {
         answers.insert(name.clone(), fixed);
     }
     Value::Object(answers)
+}
+
+/// One minus the normalised Shannon entropy of a distribution: 1 when all
+/// the mass is on one option, 0 when it is spread evenly. `None` for fewer
+/// than two options, where concentration says nothing.
+#[must_use]
+pub fn concentration(probs: &serde_json::Map<String, Value>) -> Option<f64> {
+    let p: Vec<f64> = probs.values().filter_map(Value::as_f64).collect();
+    if p.len() < 2 {
+        return None;
+    }
+    let total: f64 = p.iter().sum();
+    if total <= 0.0 {
+        return None;
+    }
+    let entropy: f64 = p
+        .iter()
+        .map(|x| x / total)
+        .filter(|x| *x > 0.0)
+        .map(|x| -x * x.ln())
+        .sum();
+    Some((1.0 - entropy / (p.len() as f64).ln()).clamp(0.0, 1.0))
 }
 
 /// One chat completion at `{endpoint}/chat/completions`, read back into
@@ -1047,10 +1072,15 @@ mod tests {
         let reply = serde_json::json!({"answers": chat_answers(&body, &content)});
         let b = parse_ballot(&reply, &options).unwrap();
         assert_eq!(b.choice, "A");
+        let expected = 1.0 - (-(0.7f64 * 0.7f64.ln()) - 0.3 * 0.3f64.ln()) / 2f64.ln();
         assert!(
-            (b.confidence - 0.7).abs() < 1e-9,
-            "confidence from the chosen probability"
+            (b.confidence - expected).abs() < 1e-9,
+            "confidence is the concentration, not the chosen probability: {}",
+            b.confidence
         );
+        let even: serde_json::Map<String, Value> =
+            serde_json::from_str(r#"{"A": 0.5, "B": 0.5}"#).unwrap();
+        assert!(concentration(&even).unwrap().abs() < 1e-12);
         assert_eq!(
             b.forecast.get("B").copied(),
             Some(1.0),
