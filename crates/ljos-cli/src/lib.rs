@@ -15511,6 +15511,85 @@ mod tests {
         assert!(looks_pasted("see ```rm -rf /```"));
     }
 
+    /// A persona's session, run for real where tmux is: the first hand-off
+    /// opens its window and the task line reaches the runner, the second
+    /// goes into the same open window, and each task keeps its own inbox
+    /// file. The runner here is a shell that writes each line it reads.
+    #[test]
+    fn a_persona_session_opens_once_and_takes_the_next_task_in_place() {
+        let _g = env_guard();
+        if which::which("tmux").is_err() || which::which("herdr").is_ok() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("cfg");
+        std::fs::create_dir_all(cfg.join("ljos")).unwrap();
+        let got = dir.path().join("got");
+        std::fs::write(
+            cfg.join("ljos/harnesses.toml"),
+            format!(
+                "[[harness]]\nname = \"echoer\"\nstart = [\"sh\", \"-c\", \"while read l; do echo \\\"$l\\\" >> {}; done\"]\n",
+                got.display()
+            ),
+        )
+        .unwrap();
+        let old_cfg = std::env::var_os("XDG_CONFIG_HOME");
+        let old_state = std::env::var_os("XDG_STATE_HOME");
+        // Safety: the environment lock is held for the whole test.
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", &cfg);
+            std::env::set_var("XDG_STATE_HOME", dir.path().join("state"));
+        }
+        let name = format!("tp{}", std::process::id());
+        let lines = |n: usize| {
+            for _ in 0..40 {
+                let have = std::fs::read_to_string(&got).unwrap_or_default();
+                if have.lines().count() >= n {
+                    return have;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+            std::fs::read_to_string(&got).unwrap_or_default()
+        };
+        let first = persona_session::hand(&name, "echoer", "first task");
+        let seen_first = lines(1);
+        let second = persona_session::hand(&name, "echoer", "second task");
+        let seen_second = lines(2);
+        let inbox: Vec<_> = std::fs::read_dir(persona_session::home(&name).join("inbox"))
+            .map(|d| d.flatten().collect())
+            .unwrap_or_default();
+        let _ = std::process::Command::new("tmux")
+            .args([
+                "kill-window",
+                "-t",
+                &format!("{}:{name}", persona_session::PERSONA_SESSION),
+            ])
+            .status();
+        unsafe {
+            match old_cfg {
+                Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+            match old_state {
+                Some(v) => std::env::set_var("XDG_STATE_HOME", v),
+                None => std::env::remove_var("XDG_STATE_HOME"),
+            }
+        }
+        let pane = first.expect("the first hand-off opens a window");
+        assert!(pane.starts_with("tmux"), "{pane}");
+        assert!(
+            seen_first.contains("inbox"),
+            "the task line reached the runner: {seen_first:?}"
+        );
+        assert_eq!(
+            second.expect("the second hand-off"),
+            pane,
+            "the open window takes it"
+        );
+        assert_eq!(seen_second.lines().count(), 2, "{seen_second:?}");
+        assert_eq!(inbox.len(), 2, "each task keeps its own file");
+    }
+
     #[test]
     fn consent_is_refused_under_a_runner() {
         let _g = env_guard();

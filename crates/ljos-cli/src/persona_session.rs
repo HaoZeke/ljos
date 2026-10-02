@@ -240,8 +240,11 @@ pub fn hand(name: &str, runner: &str, task: &str) -> Result<String> {
     let inbox = home.join("inbox");
     std::fs::create_dir_all(&inbox)
         .with_context(|| format!("persona {name}: {}", inbox.display()))?;
-    let stamp = crate::now_utc().replace(':', "");
-    let file = inbox.join(format!("{stamp}.md"));
+    // Two tasks in one second must not share a file.
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
+    let file = inbox.join(format!("{millis}-{}.md", std::process::id()));
     std::fs::write(&file, task)?;
     let line = format!(
         "Read {} and do what it asks, through ljos; it is your next task as {name}.",
