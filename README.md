@@ -31,6 +31,7 @@ ljos seat                                      # who is sitting: the seat, this 
 ljos complete <node> --status done
 ljos cards
 ljos policy -- ls
+ljos approve <request-id>                       # record explicit consent for one stopped command
 ljos consensus vissue-xxxx
 ljos trust alice bob 0.8 --why deed-… [--about docs]
 ljos persona reviewer --anchor 0.2 --view "Reads for what breaks in production." --about release

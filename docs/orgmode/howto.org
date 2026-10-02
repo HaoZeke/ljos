@@ -115,6 +115,40 @@ $ echo '{"hook_event_name":"PreToolUse","tool_input":{"command":"git push --forc
 {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"git-force-push (seat rule `ljos-policyd`)"}}
 #+end_src
 
+An =ask= rule uses the caller's approval UI when that UI is supported.
+Otherwise the hook stops the command and prints a request id with
+=ljos approve REQUEST_ID=. Once the person has explicitly approved that
+command, run the printed command to record consent, then retry the
+original tool call. Consent already given for that request counts; there
+is no need to ask the same question again.
+
+#+begin_src console
+$ ljos approve REQUEST_ID
+Approved once: git push origin main
+Directory: /work/project
+Conversation: example-session
+Retry the original command.
+#+end_src
+
+=REQUEST_ID= is the 32-character hexadecimal id printed by the hook, not
+an arbitrary command or a wildcard. The receipt names the exact command
+and the directory and conversation reported by the hook. A tool-level
+working directory takes precedence when the caller includes it. A caller
+that supplies only its conversation directory does not expose shell
+working-directory overrides to this check.
+
+The grant lasts for one matching attempt and expires fifteen minutes
+after the request. A changed command, reported directory, conversation,
+tool, or rule needs its own approval. Retrying an expired or consumed id
+is refused. Deny rules and the policy binary still run on every attempt
+and take precedence over consent. Native execution permissions still
+apply after the hook accepts the retry.
+
+Requests live in the private login runtime directory, under
+=ljos/approvals/requests.json=. They are temporary consent records, not
+standing rules or memories. The file is locked while a grant is recorded
+or consumed; unavailable or invalid state keeps the command blocked.
+
 **Grok Build.** =ljos onboard --harness grok= writes
 =~/.grok/hooks/ljos.json=. The hook searches on the prompt, holds the
 text, and emits it on =PostToolUse=. The page [[file:grok-build.org][Grok Build]]

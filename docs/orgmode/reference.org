@@ -41,6 +41,7 @@
 | =release ID [--assignee NAME]= | claim graph | hand the session node back unfinished: ready, generation moved |
 | =complete ID [--status done\vert failed\vert cancelled]= | claim graph | finish the session node |
 | =cards [--dir DIR]= | cards | print =USER.md= and =MEMORY.md= |
+| =approve REQUEST_ID= | runtime | record explicit consent for one pending hook request; one matching attempt, fifteen-minute lifetime, deny rules still apply |
 | =policy ARGV...= | policy, pack | the line as it would run, the TCB verdict if =ljos-policyd= answered, then a matching pack rule, then what the pack knows that bears on it |
 | =hook [--limit N]= | policy, pack | hook JSON or argv on stdin; on =PreToolUse= the TCB and pack rules, a deny is =permissionDecision=; on a prompt the hits scoring at least 0.6 of the best that two scorers named, preferences first then lessons oldest first, each with its age, five at most, each once per runner session |
 | =bump-plan BUNDLE --project P --parent I [--generation G] [--dry-run]= | tracker | one child issue per module the bundle's lock builds, under =I=, blocked by the modules built before it along the SBOM's edges; ids are a hash of module and generation, so a rerun holds what exists and adds what is missing; =--dry-run= prints the rows |
