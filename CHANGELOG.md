@@ -2,6 +2,21 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
+## Unreleased
+
+- The seat guards its own law. Before any rule, a shell command that
+  writes the seat's binaries (`ljos`, `ljos-mcp`, `ljos-policyd`), its
+  config or a runner's hook registration (`~/.codex/hooks.json`,
+  `~/.gemini/config/hooks.json`, `~/.claude/settings.json`,
+  `~/.grok/hooks/ljos.json`, the opencode and omp plugins), or a file
+  tool aimed at one, is refused as the person's to change; reading
+  them is not. An agy session had replaced `~/.local/bin/ljos` with a
+  script that allowed every command, and its answer broke every other
+  runner's prompt hook. agy's gate now sees every tool, and a file
+  tool names the path it writes.
+- `ljos doctor` fails a `seat binary` row when the `ljos` the hooks run
+  is not a binary or not the one running the doctor.
+
 ## 0.21.1 (2026-10-02)
 
 - A deny on a bare tracker verb names the exact seat command to run in

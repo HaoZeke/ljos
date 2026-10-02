@@ -898,24 +898,28 @@ fn main() -> Result<()> {
             let argv: Vec<String> = call.cue.split_whitespace().map(String::from).collect();
             // A tool call with no command line (a file read, a search) has
             // no argv for the law to judge; the TCB sees only shell lines.
-            let tcb_rule =
-                if (call.event == "PreToolUse" || call.event == "argv") && !argv.is_empty() {
-                    match tcb_check(&argv) {
-                        Some(t) if t.starts_with("deny") => Some(Rule {
-                            pattern: "ljos-policyd".into(),
-                            verdict: "deny".into(),
-                            reason: t.split('\t').nth(1).unwrap_or("tcb").to_string(),
-                        }),
-                        None if policyd_required() => Some(Rule {
-                            pattern: "ljos-policyd".into(),
-                            verdict: "deny".into(),
-                            reason: "TCB required".to_string(),
-                        }),
-                        _ => None,
-                    }
-                } else {
-                    None
-                };
+            let guarded = (call.event == "PreToolUse" || call.event == "argv")
+                .then(|| ljos_cli::seat_guard(&call.cue))
+                .flatten();
+            let tcb_rule = if guarded.is_some() {
+                guarded
+            } else if (call.event == "PreToolUse" || call.event == "argv") && !argv.is_empty() {
+                match tcb_check(&argv) {
+                    Some(t) if t.starts_with("deny") => Some(Rule {
+                        pattern: "ljos-policyd".into(),
+                        verdict: "deny".into(),
+                        reason: t.split('\t').nth(1).unwrap_or("tcb").to_string(),
+                    }),
+                    None if policyd_required() => Some(Rule {
+                        pattern: "ljos-policyd".into(),
+                        verdict: "deny".into(),
+                        reason: "TCB required".to_string(),
+                    }),
+                    _ => None,
+                }
+            } else {
+                None
+            };
             // An asked push is gated by where it goes: free to the person's
             // own unreleased repository, passed on a cited decision to a
             // released one, the person's to run anywhere else.

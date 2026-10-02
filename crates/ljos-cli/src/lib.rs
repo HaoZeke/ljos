@@ -1819,7 +1819,7 @@ fn hook_step(file: &Path, events: &[String], dry: bool) -> Step {
 pub fn named_hook_spec(command: &str) -> Value {
     let run = |event: &str, timeout: u64| serde_json::json!({"type": "command", "command": format!("{command} --event {event}"), "timeout": timeout});
     serde_json::json!({
-        "PreToolUse": [{"matcher": "run_command", "hooks": [run("PreToolUse", 10)]}],
+        "PreToolUse": [{"matcher": "*", "hooks": [run("PreToolUse", 10)]}],
         "PreInvocation": [run("PreInvocation", 15)],
         "Stop": [run("Stop", 15)],
     })
@@ -2080,8 +2080,24 @@ fn steps_call(v: &Value, event: Option<&str>) -> HookCall {
                 .or_else(|| args["command"].as_str())
                 .map(str::to_string)
                 // Another tool's arguments are file text, not a command
-                // line, and the law must not read them as one.
-                .unwrap_or_else(|| v["toolCall"]["name"].as_str().unwrap_or("").to_string());
+                // line, and the law must not read them as one; a file it
+                // writes is named, so the seat's guard sees it.
+                .unwrap_or_else(|| {
+                    let name = v["toolCall"]["name"].as_str().unwrap_or("");
+                    let path = [
+                        "TargetFile",
+                        "AbsolutePath",
+                        "FilePath",
+                        "file_path",
+                        "path",
+                    ]
+                    .iter()
+                    .find_map(|k| args[*k].as_str());
+                    match path {
+                        Some(p) if name != "view_file" => format!("{name} {p}"),
+                        _ => name.to_string(),
+                    }
+                });
             ("PreToolUse", cue)
         }
         "PreInvocation" if opens_turn => {
@@ -6357,6 +6373,104 @@ pub fn cite_stands(cite: &str) -> std::result::Result<String, String> {
     ))
 }
 
+/// The files that are the seat's law and its reach into each runner: the
+/// binaries the hooks run and the files that register them. An agent
+/// that may rewrite them can rewrite the law, so only the person does.
+pub const SEAT_PATHS: &[&str] = &[
+    "/bin/ljos",
+    "/bin/ljos-mcp",
+    "/bin/ljos-policyd",
+    "/.config/ljos/",
+    "/.codex/hooks.json",
+    "/.codex/config.toml",
+    "/.gemini/config/hooks.json",
+    "/.gemini/config/mcp_config.json",
+    "/.claude/settings.json",
+    "/.grok/hooks/ljos.json",
+    "/.config/opencode/plugins/ljos.ts",
+    "/.omp/agent/extensions/ljos.ts",
+];
+
+/// Whether a path names one of [`SEAT_PATHS`]; a backup beside a binary
+/// (`ljos.bak`) is not the binary.
+#[must_use]
+pub fn is_seat_path(path: &str) -> bool {
+    let p = path.trim_matches(|c| c == '"' || c == '\'');
+    SEAT_PATHS.iter().any(|s| {
+        if s.ends_with('/') {
+            p.contains(s)
+        } else {
+            p.ends_with(s)
+        }
+    })
+}
+
+/// Commands that read a file and change nothing.
+const READERS: &[&str] = &[
+    "cat",
+    "less",
+    "head",
+    "tail",
+    "ls",
+    "file",
+    "stat",
+    "sha256sum",
+    "md5sum",
+    "grep",
+    "rg",
+    "jq",
+    "diff",
+    "difft",
+    "strings",
+    "readlink",
+    "realpath",
+    "which",
+    "wc",
+    "bat",
+    "cmp",
+];
+
+/// The seat's own guard, before any rule: a shell command that writes one
+/// of [`SEAT_PATHS`] (anything but a reader, or a redirect into it), or a
+/// file tool aimed at one, is refused. `ljos onboard` and `ljos` itself
+/// write them, run by the person.
+#[must_use]
+pub fn seat_guard(line: &str) -> Option<Rule> {
+    let refuse = |what: &str| {
+        Rule {
+        pattern: "seat-guard".into(),
+        verdict: "deny".into(),
+        reason: format!(
+            "{what} is the seat's own law or its hook into a runner, and only the person changes it. \
+             Say what you need changed and stop; do not work around the hook."
+        ),
+    }
+    };
+    for seg in raw_segments(line) {
+        let words = strip_prefixes(&seg);
+        let Some(first) = words.first() else { continue };
+        let first = first.rsplit('/').next().unwrap_or(first);
+        if first == "ljos" {
+            continue;
+        }
+        let redirect_target = seg
+            .split('>')
+            .skip(1)
+            .filter_map(|t| t.trim_start_matches('>').split_whitespace().next())
+            .find(|t| is_seat_path(t));
+        if let Some(t) = redirect_target {
+            return Some(refuse(t));
+        }
+        if READERS.contains(&first) {
+            continue;
+        }
+        if let Some(t) = words.iter().skip(1).find(|w| is_seat_path(w)) {
+            return Some(refuse(t));
+        }
+    }
+    None
+}
+
 /// The seat verb a bare tracker verb stands in for: the tracker writes
 /// one store, the seat's verb writes every store and weighs the ballot.
 pub const SEAT_VERBS: &[(&str, &str)] = &[
@@ -7543,7 +7657,41 @@ pub fn doctor() -> Vec<Habitat> {
     });
     out.extend(runners);
     out.extend(jev::doctor_row());
+    out.push(seat_binary_row());
     out
+}
+
+/// Whether the `ljos` the hooks run is this binary. A runner that swaps
+/// it for a script answers every hook with what the script says, and the
+/// law is gone without a word, so the doctor compares the bytes.
+fn seat_binary_row() -> Habitat {
+    let state = match (ljos_path(), std::env::current_exe()) {
+        (Ok(hooked), Ok(me)) => {
+            let a = std::fs::read(&hooked).unwrap_or_default();
+            let b = std::fs::read(&me).unwrap_or_default();
+            if !a.starts_with(b"\x7fELF") {
+                Err(format!(
+                    "{} is not a binary: something replaced the seat; restore it with `ljos onboard` after reinstalling",
+                    hooked.display()
+                ))
+            } else if a != b {
+                Err(format!(
+                    "{} is not the ljos running this doctor ({}); the hooks run another program",
+                    hooked.display(),
+                    me.display()
+                ))
+            } else {
+                Ok(format!("{} is this ljos", hooked.display()))
+            }
+        }
+        (Err(e), _) => Err(format!("{e:#}")),
+        (_, Err(e)) => Err(e.to_string()),
+    };
+    Habitat {
+        name: "seat binary",
+        ok: state.is_ok(),
+        state: state.unwrap_or_else(|e| e),
+    }
 }
 
 /// A binary on PATH answers even when crates.io is ahead. Sitting refuses
@@ -15113,6 +15261,32 @@ mod tests {
     }
 
     #[test]
+    fn the_seat_guards_its_own_law() {
+        assert!(seat_guard("cp /tmp/shim ~/.local/bin/ljos").is_some());
+        assert!(seat_guard("printf x > /home/u/.local/bin/ljos").is_some());
+        assert!(seat_guard("cat /tmp/x > ~/.gemini/config/hooks.json").is_some());
+        assert!(seat_guard("sed -i s/a/b/ ~/.codex/hooks.json").is_some());
+        assert!(seat_guard("write_to_file /home/u/.local/bin/ljos").is_some());
+        assert!(
+            seat_guard("cat ~/.gemini/config/hooks.json").is_none(),
+            "reading is fine"
+        );
+        assert!(seat_guard("sha256sum ~/.local/bin/ljos ~/.local/bin/ljos.bak").is_none());
+        assert!(
+            seat_guard("cp ~/.local/bin/ljos /tmp/copy").is_some(),
+            "a writer naming it is refused"
+        );
+        assert!(seat_guard("ljos onboard --harness grok").is_none());
+        assert!(seat_guard("cargo build --release").is_none());
+        assert!(!is_seat_path("~/.local/bin/ljos.bak"));
+        let edit = hook_call_as(
+            r##"{"toolCall":{"name":"write_to_file","args":{"TargetFile":"/home/u/.local/bin/ljos","CodeContent":"#!/bin/sh"}},"conversationId":"c"}"##,
+            Some("PreToolUse"),
+        );
+        assert_eq!(edit.cue, "write_to_file /home/u/.local/bin/ljos");
+    }
+
+    #[test]
     fn a_denied_tracker_verb_names_the_seat_command_to_run() {
         assert_eq!(
             seat_command_for("vissue claim ljos-6c3z").as_deref(),
@@ -15203,7 +15377,10 @@ mod tests {
             r#"{"toolCall":{"name":"write_to_file","args":{"CodeContent":"git push --force"}},"conversationId":"c-1"}"#,
             None,
         );
-        assert_eq!(edit.cue, "write_to_file", "file text is not a command line");
+        assert_eq!(
+            edit.cue, "write_to_file",
+            "file text is not a command line, and no path is named"
+        );
         let later = hook_call_as(
             r#"{"invocationNum":3,"conversationId":"c-1"}"#,
             Some("PreInvocation"),
