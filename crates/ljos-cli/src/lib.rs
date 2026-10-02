@@ -2054,7 +2054,6 @@ pub fn prompt_hook_stdout(
         hold_hook_note(session, text, ids);
         String::new()
     } else {
-        hold_hook_context(session, text);
         text.to_string()
     }
 }
@@ -3155,7 +3154,9 @@ fn due_nudge(call: &HookCall) -> (String, Option<String>) {
     }
     (
         format!(
-            "{due} claim{} due for review in this seat: `ljos due`, read each, then `ljos graded ID` (or `--lapsed`).",
+            "{due} claim{} due for review in this seat. Review is not the task: when the work \
+             reaches a pause, `ljos due` shows the soonest {SITTING_DUE}; grade one only after checking it \
+             against what you know (`ljos graded ID`, `--lapsed` when it no longer holds) and leave the rest due.",
             if due == 1 { " is" } else { "s are" }
         ),
         Some(key),
@@ -3212,7 +3213,10 @@ pub fn hook_output_ruled(call: &HookCall, context: &str, verdict: Option<&Rule>)
                 (
                     "deny",
                     format!(
-                        "ask the person before running this: {} (seat rule `{}`)",
+                        "ask the person before running this: {} (seat rule `{}`). This runner \
+                         cannot ask and the rule does not lift on a yes in chat, so retrying \
+                         returns this same refusal: stop, tell the person the exact command, \
+                         and leave it for them to run.",
                         r.reason, r.pattern
                     ),
                 )
@@ -7505,6 +7509,7 @@ pub fn sitting_due_report(island: &Value) -> Result<String> {
     let now = now_utc();
     let due = due_on_island_first(due_of(&atoms, &now), island);
     let shown = due.len().min(SITTING_DUE);
+    record_due_shown(&due[..shown]);
     Ok(format!(
         "{}{}{}\n",
         format_due(&due[..shown]),
@@ -7513,20 +7518,89 @@ pub fn sitting_due_report(island: &Value) -> Result<String> {
     ))
 }
 
-/// The review clock as `ljos due` prints it: the due atoms, then the summary.
-pub fn due_report() -> Result<String> {
+/// The review clock as `ljos due` prints it: the soonest [`SITTING_DUE`]
+/// due atoms, then the summary. Those rows are the ones `graded` takes.
+/// With `all`, every due atom is listed to read, and none is put up for
+/// grading: a list of a thousand is a census, not a review.
+pub fn due_report(all: bool) -> Result<String> {
     let client = pack()?;
     // The sweep runs first, so a review left due past twice its interval is
     // lapsed or forgotten before the list is read, and the report says so.
     let swept = client.sweep(&client.workspace()).ok();
     let atoms = atoms_lean(&client, &client.workspace()).context("due: GET /v1/atoms failed")?;
     let now = now_utc();
+    let due = due_of(&atoms, &now);
+    let shown = if all {
+        &due[..]
+    } else {
+        &due[..due.len().min(SITTING_DUE)]
+    };
+    if !all {
+        record_due_shown(shown);
+    }
     Ok(format!(
         "{}{}{}\n",
-        format_due(&due_of(&atoms, &now)),
+        format_due(shown),
         review_summary(&atoms, &now),
         format_sweep(swept.as_ref())
     ))
+}
+
+/// How long a due row stays open to `graded` after a page showed it.
+pub const DUE_SHOWN_TTL_S: u64 = 3600;
+
+fn due_shown_path() -> PathBuf {
+    runtime_dir().join("due-shown")
+}
+
+fn epoch_s() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// The ids a due page showed inside [`DUE_SHOWN_TTL_S`], read from `text`
+/// (`EPOCH\tID` lines) at `now`.
+#[must_use]
+pub fn due_shown_live(text: &str, now: u64) -> Vec<(u64, String)> {
+    text.lines()
+        .filter_map(|l| {
+            let (t, id) = l.split_once('\t')?;
+            let t: u64 = t.trim().parse().ok()?;
+            (now.saturating_sub(t) < DUE_SHOWN_TTL_S && !id.trim().is_empty())
+                .then(|| (t, id.trim().to_string()))
+        })
+        .collect()
+}
+
+/// Put the rows a due page showed up for grading. A page shared by the
+/// CLI and every server of the login lives in the runtime directory.
+pub fn record_due_shown(rows: &[Value]) {
+    let path = due_shown_path();
+    let now = epoch_s();
+    let mut live = due_shown_live(&std::fs::read_to_string(&path).unwrap_or_default(), now);
+    for id in rows.iter().filter_map(|a| a["id"].as_str()) {
+        live.retain(|(_, i)| i != id);
+        live.push((now, id.to_string()));
+    }
+    let _ = std::fs::create_dir_all(runtime_dir());
+    let text: String = live.iter().map(|(t, i)| format!("{t}\t{i}\n")).collect();
+    let _ = std::fs::write(path, text);
+}
+
+/// Take `id` off the page, true when a page showed it inside the window.
+fn take_due_shown(id: &str) -> bool {
+    let path = due_shown_path();
+    let mut live = due_shown_live(
+        &std::fs::read_to_string(&path).unwrap_or_default(),
+        epoch_s(),
+    );
+    let before = live.len();
+    live.retain(|(_, i)| i != id);
+    let text: String = live.iter().map(|(t, i)| format!("{t}\t{i}\n")).collect();
+    let _ = std::fs::write(path, text);
+    live.len() < before
 }
 
 /// One line on what the sweep did, or nothing when it found nothing.
@@ -7563,6 +7637,7 @@ pub fn due_page() -> Result<(Vec<Value>, usize, String)> {
     let all = due_of(&atoms, &now);
     let total = all.len();
     let shown: Vec<Value> = all.into_iter().take(SITTING_DUE).collect();
+    record_due_shown(&shown);
     Ok((shown, total, review_summary(&atoms, &now)))
 }
 
@@ -7832,6 +7907,16 @@ pub fn graded(id: &str, recalled: bool) -> Result<Value> {
     let id = id.trim();
     if id.is_empty() {
         bail!("graded: an atom id is required");
+    }
+    // A grade says the claim was read against the work. One no due page
+    // showed in the last hour was not, and a loop over a saved list grades
+    // a thousand claims it never read, each lapse bringing it back sooner.
+    if !take_due_shown(id) {
+        bail!(
+            "graded: {id} is not on a due page read in the last hour; `ljos due` (or \
+             ljos_due) shows the soonest {SITTING_DUE}, and only those are graded, \
+             each after checking it against the work"
+        );
     }
     let client = pack()?;
     client
@@ -13812,6 +13897,19 @@ mod tests {
             lines[0]
         );
         assert!(lines[1].contains("about anything"), "{}", lines[1]);
+    }
+
+    #[test]
+    fn a_due_page_is_what_graded_takes() {
+        let now = 10_000;
+        let text = format!(
+            "{}\tfresh\n{}\tstale\nbroken line\n",
+            now - 10,
+            now - DUE_SHOWN_TTL_S
+        );
+        let live = due_shown_live(&text, now);
+        assert_eq!(live, vec![(now - 10, "fresh".to_string())]);
+        assert!(due_shown_live("", now).is_empty());
     }
 
     #[test]

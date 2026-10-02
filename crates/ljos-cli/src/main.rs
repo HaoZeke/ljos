@@ -355,8 +355,12 @@ enum Cmd {
         #[arg(long)]
         import: bool,
     },
-    /// Atoms whose review is due, then one line on the state of the clock.
-    Due,
+    /// The soonest eight atoms whose review is due, then one line on the state of the clock.
+    Due {
+        /// List every due atom to read; none of them is put up for grading.
+        #[arg(long)]
+        all: bool,
+    },
     /// Put an eb-stack bundle's modules on the tracker: one child issue per module under the parent, blockers along the dependency edges, the same ids on every run. `vissue ready` then lists what a seat can build now.
     BumpPlan {
         /// The bundle directory: `locks/default.lock.json` and `package.sbom.cdx.json` inside it.
@@ -1055,7 +1059,7 @@ fn main() -> Result<()> {
                 println!("{line}");
             }
         }
-        Cmd::Due => print!("{}", due_report()?),
+        Cmd::Due { all } => print!("{}", due_report(all)?),
         Cmd::BumpPlan {
             bundle,
             project,

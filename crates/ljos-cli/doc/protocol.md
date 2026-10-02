@@ -40,10 +40,13 @@ tracker as a `playbook:` note until `finish` or `release`.
 1. `ljos doctor`. A `no` on `tracker`, `deed store` or `pack` is the answer;
    `packsetd` on a scratch port starts a pack writer. Do not proceed on a `no`.
 2. `ljos cards`. What the human froze. Read, never write.
-3. `ljos due`. What is due for review. The verb prints the list; it does
-   not grade. After the sitting, read each claim and `ljos graded ID`
-   (`--lapsed` when you had to look it up). The review clock moves only
-   when you grade.
+3. `ljos due`. What is due for review: the soonest eight and the total.
+   The verb prints a page; it does not grade. After the sitting, check a
+   shown claim against the work and `ljos graded ID` (`--lapsed` when it
+   no longer holds). `graded` takes only a claim a due page showed in the
+   last hour, so a saved list cannot be graded unread; `ljos due --all`
+   lists everything to read and puts none of it up. The review clock
+   moves only when you grade, and a backlog is left due, not drained.
 4. `ljos island` on the issue's title. The sitting takes the strongest
    eight. The number on a row is spread along links, not a rank.
    `--as NAME` walks that persona's weights. `--fire` after the island

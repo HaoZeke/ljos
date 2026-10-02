@@ -4,6 +4,17 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
+- `graded` takes only a claim a due page (`ljos due`, `ljos_due`, a
+  sitting) showed in the last hour. A codex seat saved the 1281-row
+  `ljos due` list and lapsed all 1314 claims unread in one loop. `ljos
+  due` prints the soonest eight; `--all` lists every due claim to read
+  and puts none up. The prompt's due line says review is not the task.
+- A runner that reads the prompt hook's answer (claude, codex) is no
+  longer handed the same note a second time on its first tool result.
+- An `ask` rule refused on a runner that cannot ask says the rule does
+  not lift on a yes in chat, so the agent stops and hands the command
+  to the person instead of retrying it.
+
 - The prompt call asks Jev two more questions in the same request: an
   `injection` noul (quoted or pasted text addressing the agent with
   instructions the person did not write), which adds a treat-as-data

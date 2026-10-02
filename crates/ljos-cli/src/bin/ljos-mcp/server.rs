@@ -1680,7 +1680,7 @@ impl LjosServer {
     }
 
     #[tool(
-        description = "Call this at the start of a sitting, after the cards: the soonest eight claims whose review is due, plus how many are due in all. Read each shown row, then ljos_graded it recalled or lapsed. The full list and the sweep are `ljos due`. The review clock moves only when you grade.",
+        description = "Call this at the start of a sitting, after the cards: the soonest eight claims whose review is due, plus how many are due in all. Read each shown row, then ljos_graded it recalled or lapsed. The sweep is `ljos due`; `ljos due --all` lists every due claim to read and puts none up for grading. The review clock moves only when you grade.",
         annotations(title = "Due", read_only_hint = true, open_world_hint = false)
     )]
     async fn ljos_due(&self) -> Result<Json<DuePage>, McpError> {
@@ -1702,7 +1702,7 @@ impl LjosServer {
     }
 
     #[tool(
-        description = "Call this for each claim ljos_due listed once you have read it: recalled (default) pushes the next review out, lapsed brings it back sooner. Returns the atom with its new due_at.",
+        description = "Call this for a claim ljos_due showed in the last hour, once you have checked it against the work; any other id is refused, and a backlog is left due rather than graded unread: recalled (default) pushes the next review out, lapsed brings it back sooner. Returns the atom with its new due_at.",
         annotations(
             title = "Graded",
             read_only_hint = false,
