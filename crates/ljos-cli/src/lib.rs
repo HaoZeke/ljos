@@ -377,7 +377,7 @@ fn server_path() -> Result<PathBuf> {
         .filter(|p| p.is_file());
     match beside {
         Some(p) => Ok(p),
-        None => which::which("ljos-mcp").context("ljos-mcp neither beside ljos nor on PATH"),
+        None => which::which("ljos-mcp").context("ljos-mcp not on PATH; install it beside ljos"),
     }
 }
 
