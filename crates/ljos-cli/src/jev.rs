@@ -683,7 +683,7 @@ fn post(cfg: &Config, body: Value, kind: &str, about: Value) -> Option<Value> {
             replies.extend(ask_all(&thinkers, &body, cfg.cache_days));
         }
     }
-    finish_post(cfg, &body, kind, about, replies, escalated)
+    finish_post(&body, kind, about, replies, escalated)
 }
 
 type Reply = (String, f64, Value, bool, f64);
@@ -716,7 +716,6 @@ fn ask_all(judges: &[(String, Judge, String)], body: &Value, cache_days: u64) ->
 
 /// Pool the replies, record the cost and log every judge's answer and why.
 fn finish_post(
-    cfg: &Config,
     body: &Value,
     kind: &str,
     about: Value,
