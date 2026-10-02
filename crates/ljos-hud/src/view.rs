@@ -640,6 +640,7 @@ mod tests {
     fn graph_pane_readout_follows_the_walk() {
         let layout = GraphLayout::from_pack(
             &[Persona {
+                runner: None,
                 name: "seat-cockpit".into(),
                 anchor: 0.4,
                 view: "graph".into(),

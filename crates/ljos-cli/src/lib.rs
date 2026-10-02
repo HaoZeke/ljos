@@ -282,6 +282,27 @@ plugin_template = "omp"
 resume = ["omp", "--continue"]
 
 [[harness]]
+name = "claude"
+register = ["claude", "mcp", "add", "-s", "user", "ljos", "--", "{server}"]
+registered = ["claude", "mcp", "get", "ljos"]
+skills = "~/.claude/skills"
+hooks = "~/.claude/settings.json"
+hook_events = ["UserPromptSubmit", "SessionEnd", "PostToolUse", "SubagentStop"]
+clients = ["claude-code"]
+resume = ["claude", "--continue"]
+
+[[harness]]
+name = "codex"
+config = "~/.codex/config.toml"
+marker = "[mcp_servers.ljos]"
+snippet = "\n[mcp_servers.ljos]\ncommand = \"{server}\"\nargs = []\nenv_vars = [\"XDG_RUNTIME_DIR\"]\nenv = { LJOS_SEAT = \"{name}\" }\n"
+skills = "~/.codex/skills"
+hooks = "~/.codex/hooks.json"
+hook_events = ["UserPromptSubmit", "PreToolUse"]
+clients = ["codex-mcp-client"]
+resume = ["codex", "resume", "--last"]
+
+[[harness]]
 name = "antigravity"
 # agy, the Antigravity CLI: servers in mcp_config.json, global skills, and a
 # hooks file of named hooks whose payload names no event.
@@ -5832,6 +5853,23 @@ pub fn is_regex_pattern(pattern: &str) -> bool {
 #[must_use]
 pub fn rule_matches(pattern: &str, command: &str) -> bool {
     if !is_regex_pattern(pattern) {
+        // A trailing `*` straight after a word goes on past the word's
+        // end, not into it: `vissue claim*` is `vissue claim` and what
+        // follows it, never the read-only `vissue claims`.
+        if let Some(stem) = pattern.strip_suffix('*') {
+            let word_end = stem
+                .chars()
+                .last()
+                .is_some_and(|c| c.is_ascii_alphanumeric());
+            if word_end && !stem.contains(['*', '?']) {
+                let line = command.trim();
+                return line.strip_prefix(stem).is_some_and(|rest| {
+                    rest.chars()
+                        .next()
+                        .is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+                });
+            }
+        }
         return glob_matches(pattern, command);
     }
     let body = pattern.strip_prefix("re:").unwrap_or(pattern);
@@ -6176,7 +6214,7 @@ fn gh_facts(owner: &str, repo: &str) -> Option<(Access, bool)> {
         let mut atom = atom_body("lesson", &repo_fact_text(owner, repo, &v), &c.workspace());
         add_entities(
             &mut atom,
-            [repo_entity(owner, repo), "horizon:standing".to_string()].into_iter(),
+            [repo_entity(owner, repo), "horizon:standing".to_string()],
         );
         atom["facts"] = v.clone();
         let _ = c.post_atom(&atom);
@@ -14367,8 +14405,8 @@ mod tests {
     #[test]
     fn onboarding_a_config_file_runner_writes_once() {
         let all: super::Harnesses = toml::from_str(super::HARNESSES_EXAMPLE).expect("parses");
-        // Three shapes, then the five runners this seat has carried.
-        assert_eq!(all.harness.len(), 8);
+        // Three shapes, then the seven runners this seat has carried.
+        assert_eq!(all.harness.len(), 10);
         assert!(all.harness[3..].iter().all(|h| h.register.len()
             + usize::from(h.config.is_some())
             + usize::from(h.config_json.is_some())
@@ -15039,6 +15077,19 @@ mod tests {
         assert!(verdict_for(&rules, "git commit -m 'then; git push it'").is_none());
         assert!(verdict_for(&rules, r#"echo "a && git push""#).is_none());
         assert!(verdict_for(&rules, "rg 'git push' docs").is_none());
+        let claim = vec![Rule {
+            pattern: "vissue claim*".into(),
+            verdict: "deny".into(),
+            reason: "use ljos sitting".into(),
+        }];
+        assert!(verdict_for(&claim, "vissue claim ljos-6c3z").is_some());
+        assert!(verdict_for(&claim, "vissue claim").is_some());
+        assert!(
+            verdict_for(&claim, "vissue claims --by codex").is_none(),
+            "listing is not claiming"
+        );
+        assert!(rule_matches("*--force*", "git push --force-with-lease"));
+        assert!(rule_matches("git push*", "git push"));
         let scan = vec![Rule {
             pattern: r"(fd|find|rg|grep|ugrep|cs)\b.*\s/(\s|$)".into(),
             verdict: "deny".into(),

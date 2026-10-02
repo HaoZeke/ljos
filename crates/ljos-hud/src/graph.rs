@@ -325,6 +325,7 @@ mod tests {
 
     fn persona(name: &str, anchor: f64) -> Persona {
         Persona {
+            runner: None,
             name: name.into(),
             anchor,
             view: "view".into(),

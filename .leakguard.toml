@@ -1,5 +1,14 @@
 # This crate names the tracker and the card files.
+# It is a seat for AI coding agents, so it names the runners and models it
+# drives, and the shipped runner shapes name where those runners keep
+# their config. Instruction files stay banned.
 allow = [
     "vissue ",
     "vissue:",
+    "claude",
+    "codex",
+    "gpt-",
+    "chatgpt",
+    "~/.codex/",
+    "~/.claude/",
 ]

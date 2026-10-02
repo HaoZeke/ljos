@@ -726,12 +726,14 @@ mod tests {
         app.snap.graph = GraphLayout::from_pack(
             &[
                 Persona {
+                    runner: None,
                     name: "a".into(),
                     anchor: 0.2,
                     view: "v".into(),
                     entities: vec![],
                 },
                 Persona {
+                    runner: None,
                     name: "b".into(),
                     anchor: 0.8,
                     view: "v".into(),

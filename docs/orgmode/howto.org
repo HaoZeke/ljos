@@ -208,7 +208,7 @@ key_file = "~/.config/ljos/jev.key"     # the default judge: Jev
 [judges.chat]
 backend = "chat"
 endpoint = "https://llm.example.org/v1"
-model = "local-120b"
+model = "openai/gpt-oss-120b"
 key_env = "LLM_API_KEY"
 budget_ms = 6000
 
@@ -239,7 +239,11 @@ buildengineer: Jev leaned A at confidence 0.61, under the 0.80 cut; not cast.
   buildengineer reasons in its own session in herdr agent persona-buildengineer; then `ljos consensus surf-ab12`
 #+end_src
 
-The runner is a =[[harness]]= in =~/.config/ljos/harnesses.toml=. Its
+The runner is any agent harness the machine runs: Claude Code, Codex,
+Grok Build, omp, hermes or Antigravity's =agy=, each on whatever model it
+is set to, from Claude Opus or GPT-5 to =gpt-oss-120b= on an
+OpenAI-compatible endpoint. It is a =[[harness]]= in
+=~/.config/ljos/harnesses.toml=. Its
 =start= and =resume= argv say how it opens a session and how it resumes
 the latest one in a directory, for example =resume = ["grok",
 "--continue"]=. It starts in a pane the person can watch and talk in: a herdr pane when herdr's
