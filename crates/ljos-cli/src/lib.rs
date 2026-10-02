@@ -1637,7 +1637,7 @@ pub const HOOK_EVENTS: &[&str] = &["UserPromptSubmit", "SessionEnd"];
 
 /// The events the hook knows a matcher for; any other event takes `*`.
 pub const HOOK_MATCHERS: &[(&str, &str)] = &[
-    ("PreToolUse", "Bash"),
+    ("PreToolUse", "Bash|Edit|Write|MultiEdit|NotebookEdit"),
     ("PostToolUse", "*"),
     ("UserPromptSubmit", "*"),
     ("Stop", "*"),
@@ -2208,6 +2208,17 @@ pub fn hook_call_as(input: &str, event: Option<&str>) -> HookCall {
         p.to_string()
     } else if let Some(c) = input["command"].as_str() {
         c.to_string()
+    } else if let Some(path) = input["file_path"]
+        .as_str()
+        .or_else(|| input["notebook_path"].as_str())
+    {
+        // A file tool's input is the file's text, not a command line: the
+        // cue is the tool and the path it writes, for the seat's guard.
+        let tool = v["tool_name"]
+            .as_str()
+            .or_else(|| v["toolName"].as_str())
+            .unwrap_or("Edit");
+        format!("{tool} {path}")
     } else if let Some(map) = input.as_object() {
         map.values()
             .filter_map(Value::as_str)
@@ -15348,6 +15359,23 @@ mod tests {
             "a deny is the rule's own"
         );
         assert_eq!(gate_push(None, "git push", None), None);
+    }
+
+    #[test]
+    fn a_file_tool_is_judged_by_the_path_it_writes() {
+        let edit = hook_call(
+            r##"{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"/home/u/.local/bin/ljos","content":"#!/bin/sh"}}"##,
+        );
+        assert_eq!(edit.cue, "Write /home/u/.local/bin/ljos");
+        assert!(seat_guard(&edit.cue).is_some());
+        let doc = hook_call(
+            r#"{"hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":"/r/CHANGELOG.md","old_string":"a","new_string":"see ~/.local/bin/ljos"}}"#,
+        );
+        assert_eq!(doc.cue, "Edit /r/CHANGELOG.md");
+        assert!(
+            seat_guard(&doc.cue).is_none(),
+            "a doc naming the path is not the path"
+        );
     }
 
     #[test]

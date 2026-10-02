@@ -4,6 +4,11 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
+- Claude Code's tool gate covers its file tools: the `PreToolUse`
+  matcher is `Bash|Edit|Write|MultiEdit|NotebookEdit`, and a file
+  tool's cue is the tool and the path it writes, not the file's text, so
+  the seat's guard refuses a write to a seat path and a doc that names
+  one passes.
 - Two signals before the prompt hook speaks. A claim Jev says bears on
   the prompt goes in when it also names a content word of the prompt,
   or when Jev is sure alone (0.75); on a vague prompt Jev had put an
