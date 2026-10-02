@@ -1999,7 +1999,7 @@ pub fn last_user_text(transcript: &str) -> String {
         .lines()
         .rev()
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .find(|v| is_user(v))
+        .find(is_user)
         .map(|v| {
             let mut found = Vec::new();
             texts(&v, false, &mut found);
@@ -13719,8 +13719,8 @@ mod tests {
     #[test]
     fn onboarding_a_config_file_runner_writes_once() {
         let all: super::Harnesses = toml::from_str(super::HARNESSES_EXAMPLE).expect("parses");
-        // Three shapes, then the four runners this seat has carried.
-        assert_eq!(all.harness.len(), 7);
+        // Three shapes, then the five runners this seat has carried.
+        assert_eq!(all.harness.len(), 8);
         assert!(all.harness[3..].iter().all(|h| h.register.len()
             + usize::from(h.config.is_some())
             + usize::from(h.config_json.is_some())
