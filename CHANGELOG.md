@@ -2,7 +2,7 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
-## Unreleased
+## 0.23.2 (2026-10-02)
 
 - A panel seats who speaks to the title. A persona its island reaches
   sits only when its own view uses a word of the title, and the view
