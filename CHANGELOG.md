@@ -2,7 +2,7 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
-## Unreleased
+## 0.22.0 (2026-10-02)
 
 - An `ask` on a runner that cannot ask prints a request id; the person
   grants that one command with `ljos approve ID`, for one attempt in
