@@ -4,6 +4,15 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
+- Thinkers are seats. When a fast judge leaves a ballot or a due claim
+  open, ljos hands it to the runners `[escalate]` names, each started
+  in a herdr or tmux pane as a seat of its own: it writes its reasoning
+  with `vissue note` and casts `ljos vote --as PERSONA-THINKER`, or
+  grades with `ljos graded`, so consensus weighs it by its trust row and
+  `learn` and `calibrate` move the row. `vote --jev`, `panel --jev` and
+  `due --judge` hand off; each hand-off is noted with its pane. The
+  0.19.0 inline escalation, which pooled thinkers' JSON inside the
+  judge, is gone.
 - The push gate asks the forge whose a remote is, so no file is needed:
   `gh api` gives the person's push permission, whether the owner is
   their own account, the collaborators and the releases, kept a day. A

@@ -5469,6 +5469,47 @@ pub fn jev_vote(name: &str, issue: &str) -> Result<JevVote> {
     Ok(JevVote::Cast(b))
 }
 
+/// What a thinker is asked to do with a persona's ballot: the brief,
+/// then how the verdict reaches the seat. It votes under a name of its
+/// own, `PERSONA-THINKER`, so its trust row is its own.
+#[must_use]
+pub fn thinker_ballot_task(brief: &str, persona: &str, thinker: &str, issue: &str) -> String {
+    format!(
+        "{brief}\n\nYou are the thinker {thinker}, asked for this ballot because a fast judge \
+         was not sure. Work through the seat: read `vissue show {issue}` and what the pack \
+         holds (`ljos search \"...\"`). Write your reasoning in two or three sentences with \
+         `vissue note {issue} \"{persona}-{thinker}: ...\"`, then cast \
+         `ljos vote {issue} --for OPTION --expect OPTION --as {persona}-{thinker} --used none` \
+         (name the deeds you used instead of none). Do not open a sitting, change files or \
+         push; the ballot and the note are the whole task."
+    )
+}
+
+/// Hand an open ballot to the configured thinkers, one pane each, and note
+/// on the issue where they run. Returns the panes.
+pub fn dispatch_ballot(
+    persona: &str,
+    issue: &str,
+    thinkers: &[(String, jev::Judge)],
+) -> Vec<String> {
+    let Ok(text) = brief(persona, issue) else {
+        return Vec::new();
+    };
+    let mut panes = Vec::new();
+    for (name, j) in thinkers {
+        if let Some(pane) =
+            jev::dispatch(name, j, &thinker_ballot_task(&text, persona, name, issue))
+        {
+            note_jev(
+                issue,
+                &format!("{persona}: ballot handed to the thinker {name} in {pane}"),
+            );
+            panes.push(pane);
+        }
+    }
+    panes
+}
+
 /// Whether a panel's Jev answers may stand as its ballots: every seated
 /// persona sure, and all on one option. Personas answered by one model are
 /// correlated voters, so their agreement settles only a question it could
@@ -5530,10 +5571,17 @@ pub fn panel_jev(issue: &str, out: &Path) -> Result<String> {
             out.display()
         ));
         lines.extend(rows);
-        for (p, b) in personas.iter().zip(&ballots) {
+        let thinkers = jev::thinkers("ballot");
+        for (i, (p, b)) in personas.iter().zip(&ballots).enumerate() {
             let path = out.join(format!("{}.md", p.name));
             std::fs::write(&path, brief(&p.name, issue)?)?;
             lines.push(format!("  {}", path.display()));
+            if !thinkers.is_empty() {
+                let one = [thinkers[i % thinkers.len()].clone()];
+                for pane in dispatch_ballot(&p.name, issue, &one) {
+                    lines.push(format!("    thinker {} in {pane}", one[0].0));
+                }
+            }
             note_jev(
                 issue,
                 &format!(
@@ -8416,6 +8464,31 @@ pub fn judge_due_page() -> Result<String> {
         "{held} of {} on the page graded by the judges; {total} were due. {summary}\n",
         shown.len()
     ));
+    let open: Vec<&str> = out
+        .lines()
+        .filter(|l| l.starts_with("unsure\t") || l.starts_with("unanswered\t"))
+        .collect();
+    if let Some((name, j)) = jev::thinkers("review")
+        .into_iter()
+        .next()
+        .filter(|_| !open.is_empty())
+    {
+        let task = format!(
+            "You are the thinker {name}, asked to review stored claims a fast judge could not \
+             settle. For each row below (state, probability, id, text), check the claim against \
+             what the pack holds (`ljos search \"...\"`) and the code or notes it names. Grade it \
+             `ljos graded ID` when it still stands, `ljos graded ID --lapsed` when it no longer \
+             does, and for one a newer claim replaces, `ljos remember \"...\"` the correction. \
+             Change no files and push nothing.\n\n{}\n",
+            open.join("\n")
+        );
+        if let Some(pane) = jev::dispatch(&name, &j, &task) {
+            out.push_str(&format!(
+                "{} left open went to the thinker {name} in {pane}\n",
+                open.len()
+            ));
+        }
+    }
     Ok(out)
 }
 
@@ -14775,6 +14848,16 @@ mod tests {
             lines[0]
         );
         assert!(lines[1].contains("about anything"), "{}", lines[1]);
+    }
+
+    #[test]
+    fn a_thinker_votes_through_the_seat_under_its_own_name() {
+        let task = thinker_ballot_task("BRIEF", "buildengineer", "grok", "surf-ab12");
+        assert!(task.starts_with("BRIEF"));
+        assert!(task
+            .contains("ljos vote surf-ab12 --for OPTION --expect OPTION --as buildengineer-grok"));
+        assert!(task.contains("vissue note surf-ab12"));
+        assert!(task.contains("Do not open a sitting"));
     }
 
     #[test]

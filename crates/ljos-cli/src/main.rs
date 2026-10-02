@@ -653,10 +653,20 @@ fn main() -> Result<()> {
                     }
                     ljos_cli::JevVote::Escalated(b) => {
                         println!(
-                            "{name}: Jev leaned {} at confidence {:.2}, under the {:.2} cut; not cast. \
-                             Start a subagent from `ljos brief {name} {issue}`",
+                            "{name}: Jev leaned {} at confidence {:.2}, under the {:.2} cut; not cast.",
                             b.choice, b.confidence, b.escalate_below
                         );
+                        let thinkers = ljos_cli::jev::thinkers("ballot");
+                        let panes = ljos_cli::dispatch_ballot(name, &issue, &thinkers);
+                        if panes.is_empty() {
+                            println!("Start a subagent from `ljos brief {name} {issue}`");
+                        } else {
+                            for pane in &panes {
+                                println!(
+                                    "  a thinker votes in {pane}; then `ljos consensus {issue}`"
+                                );
+                            }
+                        }
                         print!(
                             "{}",
                             ljos_cli::persist_tracker(&issue, "escalated a ballot")
