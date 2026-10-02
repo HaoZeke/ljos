@@ -2,6 +2,14 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
+## Unreleased
+
+- `vissue vote ID` with no `--for` and no `--withdraw` reads the tally
+  and is not refused; the seat rule on `vissue vote*` had denied a read.
+- The seat command named in a tracker-verb deny drops the shell's
+  redirections: `vissue vote X --for A 2>&1` is told `ljos vote X --for
+  A`, not `ljos vote X 2>`.
+
 ## 0.23.2 (2026-10-02)
 
 - A panel seats who speaks to the title. A persona its island reaches

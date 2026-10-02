@@ -6812,6 +6812,8 @@ pub fn seat_command_for(line: &str) -> Option<String> {
         }
         let verb = words.next()?;
         let (_, seat) = SEAT_VERBS.iter().find(|(v, _)| *v == verb)?;
+        // A redirection is the shell's, not the verb's argument.
+        let words = words.filter(|w| !is_redirection(w));
         // `claim` takes an assignee the sitting reads from the runner.
         let rest: Vec<&str> = if verb == "claim" {
             words.take(1).collect()
@@ -6826,11 +6828,35 @@ pub fn seat_command_for(line: &str) -> Option<String> {
     })
 }
 
+/// A shell redirection word: `>`, `2>&1`, `<`, `>>file`, `&>`.
+fn is_redirection(w: &str) -> bool {
+    let t = w.trim_start_matches(|c: char| c.is_ascii_digit());
+    t.starts_with('>') || t.starts_with('<') || t.starts_with("&>")
+}
+
+/// Whether a line's `vissue vote` only reads the tally: no `--for` and no
+/// `--withdraw` on it.
+fn reads_the_tally(line: &str) -> bool {
+    command_segments(line).iter().any(|seg| {
+        let w: Vec<&str> = seg.split_whitespace().collect();
+        w.first() == Some(&"vissue")
+            && w.get(1) == Some(&"vote")
+            && !w
+                .iter()
+                .any(|x| *x == "--for" || x.starts_with("--for=") || *x == "--withdraw")
+    })
+}
+
 /// A deny on a bare tracker verb names the exact seat command to run in
 /// its place, so the agent runs it instead of guessing at a placeholder.
+/// `vissue vote ID` with no ballot reads the tally, which writes nothing
+/// and is not refused.
 #[must_use]
 pub fn redirect_seat_verb(rule: Option<Rule>, line: &str) -> Option<Rule> {
     let mut r = rule?;
+    if r.verdict == "deny" && r.pattern.starts_with("vissue vote") && reads_the_tally(line) {
+        return None;
+    }
     if r.verdict == "deny" {
         if let Some(cmd) = seat_command_for(line) {
             r.reason = format!("{} Run `{cmd}` instead.", r.reason.trim_end());
@@ -15906,6 +15932,22 @@ mod tests {
             Some("ljos vote surf-ab12 --for A")
         );
         assert_eq!(seat_command_for("vissue claims --by codex"), None);
+        assert_eq!(
+            seat_command_for("vissue vote surf-kfqh --for A 2>&1 | head").as_deref(),
+            Some("ljos vote surf-kfqh --for A"),
+            "a redirection is the shell's"
+        );
+        let vote = Rule {
+            pattern: "vissue vote*".into(),
+            verdict: "deny".into(),
+            reason: "use ljos vote".into(),
+        };
+        assert!(
+            redirect_seat_verb(Some(vote.clone()), "vissue vote surf-kfqh 2>&1 | head").is_none(),
+            "the tally is a read"
+        );
+        assert!(redirect_seat_verb(Some(vote.clone()), "vissue vote surf-kfqh --for A").is_some());
+        assert!(redirect_seat_verb(Some(vote), "vissue vote surf-kfqh --withdraw").is_some());
         assert_eq!(seat_command_for("ljos sitting x"), None);
         let deny = Rule {
             pattern: "vissue claim*".into(),
