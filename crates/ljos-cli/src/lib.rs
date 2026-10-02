@@ -15388,6 +15388,7 @@ mod tests {
 
     #[test]
     fn a_persona_votes_through_the_seat_under_its_own_name() {
+        let _g = env_guard();
         let task = persona_ballot_task("BRIEF", "buildengineer", "surf-ab12");
         assert!(task.starts_with("BRIEF"));
         assert!(
