@@ -2,6 +2,13 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
+## 0.22.3 (2026-10-02)
+
+- Two tasks handed to a persona in one second keep two inbox files; the
+  file was named to the second, so the later overwrote the earlier. A
+  live test opens a persona's tmux window, hands it two tasks and reads
+  both back.
+
 ## 0.22.2 (2026-10-02)
 
 - `ljos-mcp` is found beside the running `ljos` before PATH, so the
