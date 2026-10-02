@@ -2675,9 +2675,11 @@ pub fn hook_note(call: &HookCall, limit: usize) -> (String, Vec<String>) {
     let (correction, choice) = judged.as_ref().map_or((None, None), |(_, j)| {
         (Some(j.correction >= j.cue_at), Some(j.choice >= j.cue_at))
     });
+    // Jev's injection answer runs high on plain requests, so it counts
+    // only beside pasted material in the prompt: two signals, not one.
     let injection = judged
         .as_ref()
-        .and_then(|(_, j)| Some(j.injection? >= j.cue_at));
+        .and_then(|(_, j)| Some(j.injection? >= j.cue_at && looks_pasted(cue)));
     for (key, extra) in [
         injection_nudge(call, injection),
         correction_nudge_as(call, correction),
@@ -3426,7 +3428,7 @@ fn correction_nudge_as(call: &HookCall, verdict: Option<bool>) -> Option<(String
 /// write: quoted logs, pages, issues or files that address the agent. Keyed
 /// on the prompt, so each such prompt is flagged once, not once a session.
 fn injection_nudge(call: &HookCall, verdict: Option<bool>) -> Option<(String, String)> {
-    if call.event != "UserPromptSubmit" || verdict != Some(true) || !looks_pasted(&call.cue) {
+    if call.event != "UserPromptSubmit" || verdict != Some(true) {
         return None;
     }
     use std::hash::{Hash, Hasher};
