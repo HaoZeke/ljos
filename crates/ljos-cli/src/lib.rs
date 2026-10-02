@@ -6624,6 +6624,37 @@ const READERS: &[&str] = &[
     "cmp",
 ];
 
+/// The command line `ssh` runs on its host: what follows the host, its
+/// outer quotes off. `None` for an ssh with no command (a login).
+fn ssh_remote_command(words: &[&str]) -> Option<String> {
+    const TAKES_VALUE: &[&str] = &[
+        "-o", "-p", "-i", "-l", "-F", "-J", "-L", "-R", "-D", "-W", "-b", "-c", "-E", "-m", "-S",
+    ];
+    let mut i = 1;
+    while i < words.len() {
+        let w = words[i];
+        if TAKES_VALUE.contains(&w) {
+            i += 2;
+        } else if w.starts_with('-') {
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    let rest = words.get(i + 1..)?;
+    if rest.is_empty() {
+        return None;
+    }
+    let joined = rest.join(" ");
+    let t = joined.trim();
+    let unquoted = t
+        .strip_prefix('\'')
+        .and_then(|x| x.strip_suffix('\''))
+        .or_else(|| t.strip_prefix('"').and_then(|x| x.strip_suffix('"')))
+        .unwrap_or(t);
+    Some(unquoted.to_string())
+}
+
 /// The seat's own guard, before any rule: a shell command that writes one
 /// of [`SEAT_PATHS`] (anything but a reader, or a redirect into it), or a
 /// file tool aimed at one, is refused. `ljos onboard` and `ljos` itself
@@ -6646,6 +6677,17 @@ pub fn seat_guard(line: &str) -> Option<Rule> {
         let first = first.rsplit('/').next().unwrap_or(first);
         if first == "ljos" {
             continue;
+        }
+        // ssh runs its last arguments as a command line on the host: that
+        // line is judged as one, so a remote run of a seat binary passes and
+        // a remote write to one is refused.
+        if first == "ssh" {
+            if let Some(remote) = ssh_remote_command(&words) {
+                if let Some(r) = seat_guard(&remote) {
+                    return Some(r);
+                }
+                continue;
+            }
         }
         let redirect_target = seg
             .split('>')
@@ -15690,6 +15732,22 @@ mod tests {
             Some("PreToolUse"),
         );
         assert_eq!(edit.cue, "write_to_file /home/u/.local/bin/ljos");
+    }
+
+    #[test]
+    fn the_guard_judges_an_ssh_remote_command_as_a_command() {
+        assert!(
+            seat_guard("ssh h 'tar -xzf a.tgz; ~/.local/bin/ljos --version'").is_none(),
+            "running is not writing"
+        );
+        assert!(seat_guard("ssh -o ConnectTimeout=5 h 'cp /tmp/x ~/.local/bin/ljos'").is_some());
+        assert!(seat_guard("ssh h \"sed -i s/a/b/ ~/.codex/hooks.json\"").is_some());
+        assert!(seat_guard("ssh h 'cat ~/.claude/settings.json'").is_none());
+        assert!(seat_guard("ssh h").is_none(), "a login is no command");
+        assert_eq!(
+            ssh_remote_command(&["ssh", "-p", "22", "host", "'ls", "-la'"]).as_deref(),
+            Some("ls -la")
+        );
     }
 
     #[test]

@@ -2,6 +2,13 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
+## Unreleased
+
+- The seat guard judges the command line `ssh` runs on its host as a
+  command of its own: `ssh h '~/.local/bin/ljos --version'` runs the
+  binary and passes, `ssh h 'cp x ~/.local/bin/ljos'` writes it and is
+  refused.
+
 ## 0.23.0 (2026-10-02)
 
 - `ljos upgrade [VERSION]` installs a published release beside the
