@@ -235,6 +235,53 @@ question no judge answered is missing from the pool, so the caller falls
 back as it does on a partial reply. The log keeps every judge's answer
 beside the pool, so each judge can be scored once outcomes are known.
 
+Judges layer. The route's judges answer first, and they should be fast
+and calibrated: Jev, or a chat model. When their pool leaves a decision
+open, it goes on to the thinkers =[escalate]= names for it. A decision is
+open when a probability falls inside =escalate_band= (0.2 to 0.8) or a
+choice's confidence falls under =escalate_below= (0.8). Thinkers are
+runners asked in their one-shot mode. Each reasons and answers with a
+two-sentence =why= beside its probabilities. The log keeps every answer
+and every =why=, and the pool takes them all:
+
+#+begin_src toml
+[judges.grok]
+backend = "command"
+command_mode = "prompt"
+command = ["grok", "-p"]
+budget_ms = 90000
+
+[judges.omp]
+backend = "command"
+command_mode = "prompt"
+command = ["omp", "-p", "--no-session", "--no-tools"]
+budget_ms = 60000
+
+[judges.hermes]
+backend = "command"
+command_mode = "prompt"
+command = ["hermes", "-z"]
+budget_ms = 120000
+
+[route]
+review = ["default"]
+ballot = ["default"]
+
+[escalate]
+review = ["grok", "omp"]
+ballot = ["grok", "omp", "hermes"]
+#+end_src
+
+=agy -p --mode plan= and any other runner with a one-shot mode take the
+same shape. The question is the last argument, and the first
+JSON object the runner prints is its answer. A thinker runs with
+=LJOS_JUDGE=1=. Under that variable the seat's hook injects nothing into
+the thinker's own turn, and the argv law still judges its commands. A
+hook never escalates, because a runner cuts a hook off within seconds.
+Thinkers answer =due --judge=, =vote --jev= and the other verbs a person
+or an agent runs. When the thinkers stay split, the decision belongs to
+a panel: =ljos sitting= writes the briefs, and =ljos consensus= settles.
+
 =ljos due --judge= puts the due page to the =review= judges. Each claim
 goes with the newer claims the pack keeps on the same subject. A claim
 the pool puts at 0.9 or more is graded recalled. One at 0.1 or less

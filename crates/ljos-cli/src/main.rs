@@ -788,6 +788,13 @@ fn main() -> Result<()> {
             let mut input = String::new();
             std::io::stdin().read_to_string(&mut input)?;
             let call = ljos_cli::hook_call_as(&input, event.as_deref());
+            // A runner the seat asked for a judgment hears nothing from the
+            // seat, so the judgment cannot open sittings or judge again;
+            // the law on its tool calls still holds.
+            if std::env::var_os("LJOS_JUDGE").is_some() && call.event != "PreToolUse" {
+                print!("{}", ljos_cli::hook_output_ruled(&call, "", None));
+                return Ok(());
+            }
             // A context event (a prompt, a tool result) says what the seat
             // knows, and saying nothing is a correct answer; a runner that
             // cuts the hook off throws the answer away and says it failed.

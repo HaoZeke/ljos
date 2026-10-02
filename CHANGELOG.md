@@ -4,6 +4,14 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
+- Judges layer: when the route's pool is unsure, a probability inside
+  `escalate_band` (0.2 to 0.8) or a choice under `escalate_below`, the
+  decision goes on to the thinkers `[escalate]` names, runners such as
+  `grok -p`, `omp -p --no-tools` or `hermes -z` in
+  prompt mode, each answering with a short `why` that the log keeps.
+  Every answer is pooled. A hook never escalates. A thinker runs with
+  `LJOS_JUDGE=1`, under which the seat's hook injects nothing and the
+  argv law still holds.
 - An asked `git push` is gated by where it goes. With
   `~/.config/ljos/push.toml` naming `owners`, a branch push to an
   unreleased repository of theirs runs; a push to one with tags, or one

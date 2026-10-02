@@ -25,6 +25,16 @@
 //! geometric mean of their distributions, scores by the weighted mean. The
 //! top-level keys are the judge named `default`, which answers every
 //! decision no route names.
+//!
+//! Judges layer. The route's judges answer first: a fast, calibrated
+//! judge such as Jev or a chat model. When their pool is unsure, a
+//! probability inside `escalate_band` or a choice under
+//! `escalate_below`, the decision goes on to the judges `[escalate]`
+//! names for it: thinkers, runners asked in their one-shot mode, slower
+//! but reasoning, each answering with a short why. Every answer is pooled
+//! and every why logged. A hook never escalates, since a runner cuts it
+//! off within seconds, and a thinker runs with `LJOS_JUDGE=1`, under which
+//! the seat's own hook says nothing, so a judgment cannot recurse.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -110,6 +120,22 @@ fn default_weight() -> f64 {
     1.0
 }
 
+fn default_band() -> [f64; 2] {
+    [0.2, 0.8]
+}
+
+/// Whether a pooled answer leaves a decision open: a probability inside
+/// the band, or a choice whose confidence is under `below`.
+#[must_use]
+pub fn unsure(answers: &Value, band: [f64; 2], below: f64) -> bool {
+    answers.as_object().into_iter().flatten().any(|(_, a)| {
+        a["noul"]
+            .as_f64()
+            .is_some_and(|p| p >= band[0] && p <= band[1])
+            || a["confidence"].as_f64().is_some_and(|c| c < below)
+    })
+}
+
 /// The decisions a route can name, and the log kind each is asked under.
 pub const DECISIONS: &[(&str, &str)] = &[
     ("prompt", "hook"),
@@ -145,6 +171,12 @@ pub struct Config {
     /// `default`.
     #[serde(default)]
     pub route: BTreeMap<String, Vec<String>>,
+    /// The thinkers a decision goes on to when the route's pool is unsure.
+    #[serde(default)]
+    pub escalate: BTreeMap<String, Vec<String>>,
+    /// The probabilities a pool is unsure inside, ends included.
+    #[serde(default = "default_band")]
+    pub escalate_band: [f64; 2],
     /// A file holding the key, one line, mode 0600.
     #[serde(default)]
     pub key_file: Option<String>,
@@ -404,7 +436,17 @@ fn usable(name: &str, j: &Judge) -> Option<String> {
 /// or a judge with no key is left out.
 #[must_use]
 pub fn judges_for(cfg: &Config, decision: &str) -> Vec<(String, Judge, String)> {
-    cfg.route_of(decision)
+    named_judges(cfg, cfg.route_of(decision))
+}
+
+/// The thinkers `[escalate]` names for `decision`, each with its key.
+#[must_use]
+pub fn thinkers_for(cfg: &Config, decision: &str) -> Vec<(String, Judge, String)> {
+    named_judges(cfg, cfg.escalate.get(decision).cloned().unwrap_or_default())
+}
+
+fn named_judges(cfg: &Config, names: Vec<String>) -> Vec<(String, Judge, String)> {
+    names
         .into_iter()
         .filter_map(|name| {
             let j = cfg.judge(&name)?;
@@ -596,13 +638,39 @@ fn post(cfg: &Config, body: Value, kind: &str, about: Value) -> Option<Value> {
     if judges.is_empty() {
         return None;
     }
-    let replies: Vec<(String, f64, Value, bool, f64)> = std::thread::scope(|scope| {
+    let mut replies = ask_all(&judges, &body, cfg.cache_days);
+    let first: Vec<(f64, Value)> = replies
+        .iter()
+        .map(|(_, w, reply, _, _)| (*w, reply["answers"].clone()))
+        .collect();
+    let in_hook = std::env::var_os("LJOS_IN_HOOK").is_some();
+    let mut escalated = false;
+    if !in_hook && !first.is_empty() {
+        let first_pool = if first.len() == 1 {
+            first[0].1.clone()
+        } else {
+            pool(&body, &first)
+        };
+        let thinkers = thinkers_for(cfg, decision);
+        if !thinkers.is_empty() && unsure(&first_pool, cfg.escalate_band, cfg.escalate_below) {
+            escalated = true;
+            replies.extend(ask_all(&thinkers, &body, cfg.cache_days));
+        }
+    }
+    finish_post(cfg, &body, kind, about, replies, escalated)
+}
+
+type Reply = (String, f64, Value, bool, f64);
+
+/// Ask each judge at once, each inside its own budget; the ones that
+/// answered, with their weight, reply, whether it was cached and its cost.
+fn ask_all(judges: &[(String, Judge, String)], body: &Value, cache_days: u64) -> Vec<Reply> {
+    std::thread::scope(|scope| {
         let handles: Vec<_> = judges
             .iter()
             .map(|(name, j, key)| {
-                let body = &body;
                 scope.spawn(move || {
-                    ask_one(j, key, body, cfg.cache_days).map(|(reply, hit)| {
+                    ask_one(j, key, body, cache_days).map(|(reply, hit)| {
                         let cost = if hit {
                             0.0
                         } else {
@@ -617,7 +685,19 @@ fn post(cfg: &Config, body: Value, kind: &str, about: Value) -> Option<Value> {
             .into_iter()
             .filter_map(|h| h.join().ok().flatten())
             .collect()
-    });
+    })
+}
+
+/// Pool the replies, record the cost and log every judge's answer and why.
+fn finish_post(
+    cfg: &Config,
+    body: &Value,
+    kind: &str,
+    about: Value,
+    replies: Vec<Reply>,
+    escalated: bool,
+) -> Option<Value> {
+    let body = body.clone();
     if replies.is_empty() {
         return None;
     }
@@ -640,6 +720,14 @@ fn post(cfg: &Config, body: Value, kind: &str, about: Value) -> Option<Value> {
         .iter()
         .map(|(name, _, reply, _, _)| (name.clone(), reply["answers"].clone()))
         .collect();
+    let why: serde_json::Map<String, Value> = replies
+        .iter()
+        .filter_map(|(name, _, reply, _, _)| {
+            reply["why"]
+                .as_str()
+                .map(|w| (name.clone(), Value::String(w.to_string())))
+        })
+        .collect();
     log(&serde_json::json!({
         "ts": crate::now_utc(),
         "kind": kind,
@@ -647,6 +735,8 @@ fn post(cfg: &Config, body: Value, kind: &str, about: Value) -> Option<Value> {
         "about": about,
         "answers": answers,
         "per_judge": per,
+        "why": why,
+        "escalated": escalated,
         "cost": cost,
     }));
     Some(serde_json::json!({
@@ -798,7 +888,8 @@ pub fn prompt_text(body: &Value) -> String {
     let state = body["state"].as_str().unwrap_or("");
     let questions = serde_json::to_string_pretty(&body["questions"]).unwrap_or_default();
     format!(
-        "{CHAT_SYSTEM} Use no tools; print only the JSON object.\n\nState:\n{state}\n\nQuestions:\n{questions}\n"
+        "{CHAT_SYSTEM} Beside \"answers\", put \"why\": two sentences on what decided it. \
+         Use no tools and change nothing; print only the JSON object.\n\nState:\n{state}\n\nQuestions:\n{questions}\n"
     )
 }
 
@@ -931,6 +1022,7 @@ fn command_post(cfg: &Judge, body: &Value) -> Option<Value> {
             .arg(prog)
             .args(args)
             .arg(prompt_text(body))
+            .env("LJOS_JUDGE", "1")
             .stdin(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .output()
@@ -940,12 +1032,15 @@ fn command_post(cfg: &Judge, body: &Value) -> Option<Value> {
         }
         let content = text_json(&String::from_utf8_lossy(&out.stdout))?;
         let answers = chat_answers(body, &content);
-        return (!answers.as_object()?.is_empty()).then(|| serde_json::json!({"answers": answers}));
+        let why = content["why"].as_str().unwrap_or("").to_string();
+        return (!answers.as_object()?.is_empty())
+            .then(|| serde_json::json!({"answers": answers, "why": why}));
     }
     let mut child = std::process::Command::new("timeout")
         .arg(secs.to_string())
         .arg(prog)
         .args(args)
+        .env("LJOS_JUDGE", "1")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -1673,6 +1768,52 @@ mod tests {
         let reply = command_post(&j, &body).unwrap();
         assert!((reply["answers"]["holds"]["noul"].as_f64().unwrap() - 0.95).abs() < 1e-9);
         assert_eq!(text_json("noise {\"a\": 1} tail").unwrap()["a"], 1);
+    }
+
+    #[test]
+    fn an_unsure_pool_goes_on_to_the_thinkers() {
+        let band = [0.2, 0.8];
+        assert!(unsure(&serde_json::json!({"q": {"noul": 0.5}}), band, 0.8));
+        assert!(!unsure(
+            &serde_json::json!({"q": {"noul": 0.95}}),
+            band,
+            0.8
+        ));
+        assert!(unsure(
+            &serde_json::json!({"c": {"choice": "A", "confidence": 0.4}}),
+            band,
+            0.8
+        ));
+        assert!(!unsure(
+            &serde_json::json!({"c": {"choice": "A", "confidence": 0.9}}),
+            band,
+            0.8
+        ));
+        let cfg: Config = toml::from_str(concat!(
+            "enabled = true\nbackend = \"command\"\ncommand = [\"true\"]\n",
+            "[judges.grok]\nbackend = \"command\"\ncommand_mode = \"prompt\"\ncommand = [\"true\"]\n",
+            "[escalate]\nreview = [\"grok\"]\n",
+        ))
+        .unwrap();
+        assert_eq!(cfg.escalate_band, [0.2, 0.8]);
+        let names: Vec<String> = thinkers_for(&cfg, "review")
+            .into_iter()
+            .map(|j| j.0)
+            .collect();
+        assert_eq!(names, ["grok"]);
+        assert!(thinkers_for(&cfg, "ballot").is_empty());
+    }
+
+    #[test]
+    fn a_thinker_says_why() {
+        let j: Judge = toml::from_str(
+            "backend = \"command\"\ncommand_mode = \"prompt\"\ncommand = [\"sh\", \"-c\", \"test \\\"$LJOS_JUDGE\\\" = 1 && echo '{\\\"answers\\\": {\\\"holds\\\": 0.3}, \\\"why\\\": \\\"a newer claim moved it\\\"}'\"]\n",
+        )
+        .unwrap();
+        let body = review_request("m", "claim", &["newer"]);
+        let reply = command_post(&j, &body).expect("the child sees LJOS_JUDGE=1");
+        assert_eq!(reply["why"], "a newer claim moved it");
+        assert!(prompt_text(&body).contains("\"why\""));
     }
 
     #[test]
