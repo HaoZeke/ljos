@@ -2,7 +2,7 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
-## Unreleased
+## 0.19.0 (2026-10-02)
 
 - A thinker never runs unseen: a prompt-mode judge opens in a herdr
   pane, else a window of the tmux session `ljos-judges` (`surface =
