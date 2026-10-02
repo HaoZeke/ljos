@@ -2,6 +2,13 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
+## Unreleased
+
+- A here-document's body is data, not commands: a seat rule no longer
+  meets `cargo build` inside `cat > job.sbatch <<'EOF' ... EOF`, which
+  refused every job script written that way on a desktop seat. Commands
+  after the closing word still count.
+
 ## 0.22.3 (2026-10-02)
 
 - Two tasks handed to a persona in one second keep two inbox files; the

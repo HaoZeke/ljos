@@ -6074,16 +6074,77 @@ fn strip_prefixes(segment: &str) -> Vec<&str> {
     words
 }
 
+/// The word a here-document at `chars[i..]` (just past `<<`) ends at:
+/// `<<EOF`, `<<-EOF`, `<<'EOF'`, `<<"EOF"`. `None` for a here-string
+/// (`<<<`) or no word.
+fn heredoc_word(chars: &[char], mut i: usize) -> Option<(String, usize)> {
+    if chars.get(i) == Some(&'<') {
+        return None;
+    }
+    if chars.get(i) == Some(&'-') {
+        i += 1;
+    }
+    while chars.get(i).is_some_and(|c| *c == ' ' || *c == '\t') {
+        i += 1;
+    }
+    let quote = chars.get(i).copied().filter(|c| *c == '\'' || *c == '"');
+    if quote.is_some() {
+        i += 1;
+    }
+    let start = i;
+    while chars
+        .get(i)
+        .is_some_and(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-' || *c == '.')
+    {
+        i += 1;
+    }
+    let word: String = chars[start..i].iter().collect();
+    if quote.is_some() && chars.get(i) == quote.as_ref() {
+        i += 1;
+    }
+    (!word.is_empty()).then_some((word, i))
+}
+
 /// The commands of a line as written, assignments kept, split outside
-/// quotes on `&&`, `||`, `;`, `|`, `&` and new lines.
+/// quotes on `&&`, `||`, `;`, `|`, `&` and new lines. A here-document's
+/// body is data the command reads, not commands, and is left out.
 fn raw_segments(line: &str) -> Vec<String> {
     let mut parts = Vec::new();
     let mut cur = String::new();
     let (mut single, mut double) = (false, false);
     let chars: Vec<char> = line.chars().collect();
+    let mut heredocs: Vec<String> = Vec::new();
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
+        if c == '<' && !single && !double && chars.get(i + 1) == Some(&'<') {
+            if let Some((word, next)) = heredoc_word(&chars, i + 2) {
+                heredocs.push(word);
+                cur.extend(&chars[i..next]);
+                i = next;
+                continue;
+            }
+        }
+        if c == '\n' && !single && !double && !heredocs.is_empty() {
+            // Skip each pending body, line by line, to its closing word.
+            parts.push(std::mem::take(&mut cur));
+            let mut j = i + 1;
+            for word in std::mem::take(&mut heredocs) {
+                loop {
+                    let end = chars[j..]
+                        .iter()
+                        .position(|c| *c == '\n')
+                        .map_or(chars.len(), |p| j + p);
+                    let text: String = chars[j..end].iter().collect();
+                    j = (end + 1).min(chars.len());
+                    if text.trim() == word || end >= chars.len() {
+                        break;
+                    }
+                }
+            }
+            i = j;
+            continue;
+        }
         match c {
             '\\' if !single => {
                 cur.push(c);
@@ -15646,6 +15707,43 @@ mod tests {
         };
         let r = redirect_seat_verb(Some(deny), "vissue claim ljos-6c3z").unwrap();
         assert!(r.reason.ends_with("Run `ljos sitting ljos-6c3z` instead."));
+    }
+
+    #[test]
+    fn a_heredoc_body_is_data_not_commands() {
+        let line = "cat > job.sbatch <<'EOF'\n#!/bin/bash\ncargo build --release\nEOF\nscp job.sbatch rg.terra: && ssh rg.terra sbatch job.sbatch";
+        let segs = command_segments(line);
+        assert!(
+            segs.iter().all(|s| !s.starts_with("cargo build")),
+            "{segs:?}"
+        );
+        assert!(
+            segs.iter().any(|s| s.starts_with("scp job.sbatch")),
+            "{segs:?}"
+        );
+        assert!(
+            segs.iter().any(|s| s.starts_with("ssh rg.terra sbatch")),
+            "{segs:?}"
+        );
+        let rules = vec![Rule {
+            pattern: "cargo build*".into(),
+            verdict: "deny".into(),
+            reason: "terra".into(),
+        }];
+        assert!(
+            verdict_for(&rules, line).is_none(),
+            "a script written by a heredoc is not run here"
+        );
+        assert!(verdict_for(&rules, "cd x && cargo build").is_some());
+        assert!(
+            verdict_for(&rules, "cat <<EOF\nx\nEOF\ncargo build").is_some(),
+            "after the body, commands count"
+        );
+        assert_eq!(
+            command_segments("grep -c x <<< \"$v\""),
+            ["grep -c x <<< \"$v\""],
+            "a here-string is no heredoc"
+        );
     }
 
     #[test]
