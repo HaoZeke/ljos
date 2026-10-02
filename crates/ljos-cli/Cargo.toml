@@ -32,6 +32,7 @@ path = "src/bin/ljos-mcp/main.rs"
 
 [dependencies]
 libc = "0.2"
+regex-automata = "0.4"
 chrono = "0.4"
 ureq = { version = "2", default-features = false, features = ["json", "tls"] }
 anyhow.workspace = true

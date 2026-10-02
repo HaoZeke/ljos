@@ -2558,6 +2558,7 @@ dependencies = [
  "clap",
  "libc",
  "packset-client",
+ "regex-automata",
  "rmcp",
  "schemars",
  "serde",

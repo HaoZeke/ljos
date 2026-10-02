@@ -4,6 +4,14 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
+- A seat rule is tried on every command a shell line runs, not only on
+  the line's start: `cd repo && git push` and `FOO=1 git push` meet the
+  `git push*` rule. The line splits on `&&`, `||`, `;`, `|` and `&`
+  outside quotes, so a commit message naming a command is not that
+  command. A pattern written as a regular expression (`re:`, or a `\b`,
+  `\s`, `\d`, `\w` or an alternation group in it) is matched as one,
+  anchored at the command's start; the three search-from-root rules in
+  the seat's pack were regexes read as globs and had never fired.
 - Judging is a decision layer over named judges. `[judges.NAME]` tables
   in `jev.toml` each name a backend, model, key (`key_file`, `key_cmd`,
   or the new `key_env`) and `weight`. `[route]` names the judges for

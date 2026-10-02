@@ -5708,6 +5708,32 @@ pub fn rules_from_pack() -> Result<Vec<Rule>> {
     Ok(rules_of(&atoms))
 }
 
+/// Whether a rule's pattern is a regular expression rather than a glob:
+/// it says so with `re:`, or it carries a class (`\b`, `\s`, `\d`, `\w`)
+/// or an alternation group, which a glob would read as literal text and
+/// never match.
+#[must_use]
+pub fn is_regex_pattern(pattern: &str) -> bool {
+    pattern.starts_with("re:")
+        || ["\\b", "\\s", "\\d", "\\w"]
+            .iter()
+            .any(|c| pattern.contains(c))
+        || (pattern.contains('(') && pattern.contains('|') && pattern.contains(')'))
+}
+
+/// A rule's pattern over one command: a regular expression anchored at the
+/// command's start, else a glob. A pattern that does not compile matches
+/// nothing.
+#[must_use]
+pub fn rule_matches(pattern: &str, command: &str) -> bool {
+    if !is_regex_pattern(pattern) {
+        return glob_matches(pattern, command);
+    }
+    let body = pattern.strip_prefix("re:").unwrap_or(pattern);
+    regex_automata::meta::Regex::new(&format!("^(?:{body})"))
+        .is_ok_and(|re| re.is_match(command.trim()))
+}
+
 /// A glob over a command line: `*` matches any run of characters, `?` one.
 /// The match is on the whole line, so `rm -rf *` is `rm -rf ` and anything
 /// after, and `*sudo*` is sudo anywhere.
@@ -5727,18 +5753,82 @@ pub fn glob_matches(pattern: &str, line: &str) -> bool {
     go(&p, &l)
 }
 
+/// The commands a shell line runs: split on `&&`, `||`, `;`, `|` and new
+/// lines outside quotes, each with leading `NAME=value` assignments and
+/// the prefixes `sudo`, `env`, `time`, `nohup` and `exec` taken off. A
+/// rule anchored at a command's start then sees `cd x && git push` and
+/// `FOO=1 git push` as the push they run, and quoted text is not split, so
+/// a commit message naming a command is not that command.
+#[must_use]
+pub fn command_segments(line: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut cur = String::new();
+    let (mut single, mut double) = (false, false);
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        match c {
+            '\\' if !single => {
+                cur.push(c);
+                if let Some(n) = chars.get(i + 1) {
+                    cur.push(*n);
+                    i += 1;
+                }
+            }
+            '\'' if !double => {
+                single = !single;
+                cur.push(c);
+            }
+            '"' if !single => {
+                double = !double;
+                cur.push(c);
+            }
+            ';' | '|' | '&' | '\n' if !single && !double => {
+                // `&` alone sends a job to the background; `&&` and `||`
+                // join; each ends the command before it.
+                parts.push(std::mem::take(&mut cur));
+                while chars.get(i + 1).is_some_and(|n| *n == c) {
+                    i += 1;
+                }
+            }
+            _ => cur.push(c),
+        }
+        i += 1;
+    }
+    parts.push(cur);
+    parts
+        .into_iter()
+        .map(|p| {
+            let mut words: Vec<&str> = p.split_whitespace().collect();
+            while let Some(w) = words.first() {
+                let assign = w.split_once('=').is_some_and(|(k, _)| {
+                    !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                });
+                if assign || ["sudo", "env", "time", "nohup", "exec"].contains(w) {
+                    words.remove(0);
+                } else {
+                    break;
+                }
+            }
+            words.join(" ")
+        })
+        .filter(|p| !p.is_empty())
+        .collect()
+}
+
 /// The verdict the rules give a command line: the first `deny` wins, then
-/// the first `ask`, else none. Returns the rule that fired.
+/// the first `ask`, else none, each tried on the whole line and on every
+/// command in it. Returns the rule that fired.
 #[must_use]
 pub fn verdict_for<'a>(rules: &'a [Rule], line: &str) -> Option<&'a Rule> {
+    let mut cues = vec![line.trim().to_string()];
+    cues.extend(command_segments(line));
+    let fires = |r: &Rule| cues.iter().any(|c| rule_matches(&r.pattern, c));
     rules
         .iter()
-        .find(|r| r.verdict == "deny" && glob_matches(&r.pattern, line))
-        .or_else(|| {
-            rules
-                .iter()
-                .find(|r| r.verdict == "ask" && glob_matches(&r.pattern, line))
-        })
+        .find(|r| r.verdict == "deny" && fires(r))
+        .or_else(|| rules.iter().find(|r| r.verdict == "ask" && fires(r)))
 }
 
 /// Anchors as the settles take them: `{"name": anchor, ...}`.
@@ -14243,6 +14333,39 @@ mod tests {
             lines[0]
         );
         assert!(lines[1].contains("about anything"), "{}", lines[1]);
+    }
+
+    #[test]
+    fn a_rule_sees_every_command_a_line_runs_and_no_quoted_text() {
+        assert_eq!(
+            command_segments("cd /x && FOO=1 sudo git push origin main | tee log; echo ok &"),
+            ["cd /x", "git push origin main", "tee log", "echo ok"]
+        );
+        let rules = vec![Rule {
+            pattern: "git push*".into(),
+            verdict: "ask".into(),
+            reason: "trust gate".into(),
+        }];
+        assert!(verdict_for(&rules, "cd repo && git push").is_some());
+        assert!(verdict_for(&rules, "GIT_SSH_COMMAND=x git push origin").is_some());
+        assert!(verdict_for(&rules, "git commit -m 'then; git push it'").is_none());
+        assert!(verdict_for(&rules, r#"echo "a && git push""#).is_none());
+        assert!(verdict_for(&rules, "rg 'git push' docs").is_none());
+        let scan = vec![Rule {
+            pattern: r"(fd|find|rg|grep|ugrep|cs)\b.*\s/(\s|$)".into(),
+            verdict: "deny".into(),
+            reason: "no search from the root".into(),
+        }];
+        assert!(is_regex_pattern(&scan[0].pattern));
+        assert!(verdict_for(&scan, "rg -l foo /").is_some());
+        assert!(verdict_for(&scan, "cd /tmp && find / -name x").is_some());
+        assert!(verdict_for(&scan, "rg -l foo /home/x").is_none());
+        assert!(!is_regex_pattern("git push*"));
+        assert!(rule_matches("re:git (push|fetch)", "git fetch origin"));
+        assert!(
+            !rule_matches("re:([", "anything"),
+            "a bad pattern matches nothing"
+        );
     }
 
     #[test]
