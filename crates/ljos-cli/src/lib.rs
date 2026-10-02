@@ -6246,6 +6246,10 @@ fn raw_segments(line: &str) -> Vec<String> {
                 double = !double;
                 cur.push(c);
             }
+            // `2>&1` and `&>` are redirections, not a background job.
+            '&' if !single && !double && (cur.ends_with('>') || chars.get(i + 1) == Some(&'>')) => {
+                cur.push(c);
+            }
             ';' | '|' | '&' | '\n' if !single && !double => {
                 // `&` alone sends a job to the background; `&&` and `||`
                 // join; each ends the command before it.
@@ -15992,6 +15996,15 @@ mod tests {
             command_segments("grep -c x <<< \"$v\""),
             ["grep -c x <<< \"$v\""],
             "a here-string is no heredoc"
+        );
+        assert_eq!(
+            command_segments("make 2>&1 | tee log"),
+            ["make 2>&1", "tee log"],
+            "2>&1 is one redirection"
+        );
+        assert_eq!(
+            command_segments("run &> out & wait"),
+            ["run &> out", "wait"]
         );
     }
 
