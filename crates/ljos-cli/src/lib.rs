@@ -367,8 +367,18 @@ pub fn harnesses_from(path: &Path) -> Result<Harnesses> {
 }
 
 /// Where `ljos-mcp` is, as the runner will start it.
+/// The `ljos-mcp` that goes with this `ljos`: the one installed beside it,
+/// else the one on PATH. A shell a runner or ssh opens may lack the
+/// install directory on PATH, and the pair is always installed together.
 fn server_path() -> Result<PathBuf> {
-    which::which("ljos-mcp").context("ljos-mcp not on PATH; install it beside ljos")
+    let beside = std::env::current_exe()
+        .ok()
+        .map(|me| me.with_file_name("ljos-mcp"))
+        .filter(|p| p.is_file());
+    match beside {
+        Some(p) => Ok(p),
+        None => which::which("ljos-mcp").context("ljos-mcp neither beside ljos nor on PATH"),
+    }
 }
 
 /// The MCP server entry any runner that reads JSON accepts.

@@ -2,6 +2,12 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
+## Unreleased
+
+- `ljos-mcp` is found beside the running `ljos` before PATH, so the
+  doctor, onboard and the seat binary row work from a shell, such as
+  ssh, that lacks the install directory on PATH.
+
 ## 0.22.1 (2026-10-02)
 
 - `ljos doctor`'s host row fails while the kernel's OOM count rises and
