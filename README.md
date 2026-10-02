@@ -55,7 +55,7 @@ ljos receive bag [--since bridge.txt] [--import]
 ljos doctor
 ljos protocol
 ljos onboard                                   # the one MCP server entry any runner takes
-ljos onboard --harness hermes                  # register with a runner named in harnesses.toml; opencode, hermes, omp, grok ship as shapes
+ljos onboard --harness hermes                  # register with a runner named in harnesses.toml; opencode, hermes, omp, grok, antigravity ship as shapes
 ljos findings out/campaign.json --remember     # an eb-stack campaign's typed findings, one lesson each under the module that failed
 ```
 

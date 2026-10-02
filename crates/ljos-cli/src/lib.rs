@@ -82,6 +82,12 @@ pub struct Harness {
     /// prompt reaches the agent at the point of action.
     #[serde(default)]
     pub hooks: Option<String>,
+    /// A hooks file whose top level maps a hook name to its events
+    /// (`{"NAME": {"PreToolUse": [...], "PreInvocation": [...]}}`) takes
+    /// the seat's hooks under this name, each command told its event with
+    /// `--event`, since that runner's payload does not name it.
+    #[serde(default)]
+    pub hooks_named: Option<String>,
     /// The events the memory hook fires on. Empty means [`HOOK_EVENTS`],
     /// the prompt event alone: a panel of this seat's personas settled on
     /// prompts over tool calls, because a turn issues many shell commands
@@ -263,6 +269,17 @@ json_entry = '{"type": "stdio", "command": "{server}", "args": []}'
 skills = "~/.omp/agent/skills"
 plugin = "~/.omp/agent/extensions/ljos.ts"
 plugin_template = "omp"
+
+[[harness]]
+name = "antigravity"
+# agy, the Antigravity CLI: servers in mcp_config.json, global skills, and a
+# hooks file of named hooks whose payload names no event.
+config_json = "~/.gemini/config/mcp_config.json"
+json_pointer = "/mcpServers/ljos"
+json_entry = '{"command": "{server}", "args": [], "env": {"LJOS_SEAT": "{name}"}}'
+skills = "~/.gemini/config/skills"
+hooks = "~/.gemini/config/hooks.json"
+hooks_named = "ljos"
 
 [[harness]]
 name = "grok"
@@ -1529,7 +1546,10 @@ pub fn onboard_from(file: &Path, harness: &str, dry: bool) -> Result<Vec<Step>> 
     let dependencies = [pack_step(dry), host_key_step(dry)];
     let mut steps = vec![register_step(h, &server, dry)];
     if let Some(file) = &h.hooks {
-        steps.push(hook_step(&expand(file), &hook_events_of(h), dry));
+        steps.push(match &h.hooks_named {
+            Some(name) => named_hook_step(&expand(file), name, dry),
+            None => hook_step(&expand(file), &hook_events_of(h), dry),
+        });
     }
     if let Some(dest) = &h.plugin {
         steps.push(plugin_step(h, &expand(dest), dry));
@@ -1754,6 +1774,107 @@ fn hook_step(file: &Path, events: &[String], dry: bool) -> Step {
     }
 }
 
+/// The seat's hooks for a runner whose hooks file maps a hook name to its
+/// events: the tool gate on shell commands, the prompt and tool-result
+/// notes on each model call, and the stop audit. The payload names no
+/// event, so each command is told its own.
+#[must_use]
+pub fn named_hook_spec(command: &str) -> Value {
+    let run = |event: &str, timeout: u64| serde_json::json!({"type": "command", "command": format!("{command} --event {event}"), "timeout": timeout});
+    serde_json::json!({
+        "PreToolUse": [{"matcher": "run_command", "hooks": [run("PreToolUse", 10)]}],
+        "PreInvocation": [run("PreInvocation", 15)],
+        "Stop": [run("Stop", 15)],
+    })
+}
+
+/// Put the seat's hooks under `name` in a named-hook file, leaving every
+/// other name alone.
+fn named_hook_step(file: &Path, name: &str, dry: bool) -> Step {
+    let what = "hook".to_string();
+    let mut root: Value = match std::fs::read_to_string(file) {
+        Ok(text) if !text.trim().is_empty() => match serde_json::from_str(&text) {
+            Ok(v) => v,
+            Err(e) => {
+                return Step {
+                    what,
+                    detail: format!("{}: not JSON: {e}", file.display()),
+                    ok: false,
+                }
+            }
+        },
+        _ => serde_json::json!({}),
+    };
+    let Some(obj) = root.as_object_mut() else {
+        return Step {
+            what,
+            detail: format!("{}: not a JSON object", file.display()),
+            ok: false,
+        };
+    };
+    let spec = named_hook_spec(&hook_command());
+    if obj.get(name) == Some(&spec) {
+        return Step {
+            what,
+            detail: format!("{} carries the seat's hooks as {name}", file.display()),
+            ok: true,
+        };
+    }
+    if dry {
+        return Step {
+            what,
+            detail: format!(
+                "would write the seat's hooks as {name} in {}",
+                file.display()
+            ),
+            ok: true,
+        };
+    }
+    obj.insert(name.to_string(), spec);
+    let written = file
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| serde_json::to_string_pretty(&root).map_err(std::io::Error::other))
+        .and_then(|text| std::fs::write(file, text + "\n"));
+    match written {
+        Ok(()) => Step {
+            what,
+            detail: format!("wrote the seat's hooks as {name} in {}", file.display()),
+            ok: true,
+        },
+        Err(e) => Step {
+            what,
+            detail: format!("{}: {e}", file.display()),
+            ok: false,
+        },
+    }
+}
+
+/// Whether a named-hook file carries the seat's hooks under `name`.
+fn named_hook_installed(file: &Path, name: &str) -> bool {
+    std::fs::read_to_string(file)
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .is_some_and(|root| {
+            ["PreToolUse", "PreInvocation", "Stop"].iter().all(|e| {
+                root[name][*e].as_array().into_iter().flatten().any(|g| {
+                    is_seat_event_hook(g)
+                        || g["hooks"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .any(is_seat_event_hook)
+                })
+            })
+        })
+}
+
+fn is_seat_event_hook(h: &Value) -> bool {
+    h["command"]
+        .as_str()
+        .is_some_and(|c| c.contains("ljos") && c.contains(" hook --event "))
+}
+
 /// Whether a runner's hooks file carries the memory hook on every event.
 fn hook_installed(file: &Path, events: &[String]) -> bool {
     let Ok(text) = std::fs::read_to_string(file) else {
@@ -1810,13 +1931,19 @@ pub enum HookShape {
     /// prompt under `extra.user_message`; a top-level `context` is
     /// injected, `decision: block` blocks, and there is no `ask`.
     Context,
+    /// camelCase stdin with `conversationId`, no event name (the hook is
+    /// told it with `--event`), the command under `toolCall.args`, the
+    /// prompt only in the transcript. A tool gate answers `decision` with
+    /// `allow`, `deny` or `ask`, which the runner asks; context goes in as
+    /// `injectSteps`; a `Stop` is held with `decision: continue`.
+    Steps,
 }
 
 impl HookShape {
     /// Whether the runner can stop and ask the person on a verdict.
     #[must_use]
     pub fn asks(self) -> bool {
-        self == Self::Asks
+        matches!(self, Self::Asks | Self::Steps)
     }
 }
 
@@ -1826,6 +1953,124 @@ impl HookShape {
 /// camelCase `hookEventName`, `sessionId` and `toolInput` read the same.
 #[must_use]
 pub fn hook_call(input: &str) -> HookCall {
+    hook_call_as(input, None)
+}
+
+/// The text of the person's last message in a transcript of JSON lines,
+/// read without knowing its schema: the last entry that names a user turn
+/// (a `type`, `role`, `source` or `stepType` value containing `user`), and
+/// in it the longest string under `text`, `content`, `prompt`, `message`,
+/// `userMessage` or `userResponse`.
+#[must_use]
+pub fn last_user_text(transcript: &str) -> String {
+    fn is_user(v: &Value) -> bool {
+        ["type", "role", "source", "stepType", "kind"]
+            .iter()
+            .any(|k| {
+                v[*k]
+                    .as_str()
+                    .is_some_and(|t| t.to_ascii_lowercase().contains("user"))
+            })
+            || v.get("userMessage").is_some()
+            || v.get("userInput").is_some()
+    }
+    fn texts(v: &Value, under: bool, out: &mut Vec<String>) {
+        const KEYS: &[&str] = &[
+            "text",
+            "content",
+            "prompt",
+            "message",
+            "userMessage",
+            "userResponse",
+            "userInput",
+        ];
+        match v {
+            Value::String(t) if under => out.push(t.clone()),
+            Value::Array(a) => a.iter().for_each(|x| texts(x, under, out)),
+            Value::Object(m) => {
+                for (k, x) in m {
+                    texts(x, under || KEYS.contains(&k.as_str()), out);
+                }
+            }
+            _ => {}
+        }
+    }
+    transcript
+        .lines()
+        .rev()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .find(|v| is_user(v))
+        .map(|v| {
+            let mut found = Vec::new();
+            texts(&v, false, &mut found);
+            found
+                .into_iter()
+                .max_by_key(String::len)
+                .unwrap_or_default()
+        })
+        .unwrap_or_default()
+}
+
+/// A call from the runner whose payload names no event: `event` is what
+/// its hooks file told the command, else what the payload's fields imply.
+/// A model call that opens a turn is the prompt; a later one, after tools
+/// ran, is where a tool result's note goes. Its own tool-result and
+/// model-result events carry nothing to say.
+fn steps_call(v: &Value, event: Option<&str>) -> HookCall {
+    let event = event.map(str::to_string).unwrap_or_else(|| {
+        if v.get("toolCall").is_some() {
+            "PreToolUse"
+        } else if v.get("executionNum").is_some() {
+            "Stop"
+        } else if v.get("invocationNum").is_some() {
+            "PreInvocation"
+        } else {
+            "PostToolUse"
+        }
+        .to_string()
+    });
+    let session = v["conversationId"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let opens_turn = v["invocationNum"].as_u64().unwrap_or(0) <= 1;
+    let (event, cue) = match event.as_str() {
+        "PreToolUse" => {
+            let args = &v["toolCall"]["args"];
+            let cue = args["CommandLine"]
+                .as_str()
+                .or_else(|| args["commandLine"].as_str())
+                .or_else(|| args["command"].as_str())
+                .map(str::to_string)
+                // Another tool's arguments are file text, not a command
+                // line, and the law must not read them as one.
+                .unwrap_or_else(|| v["toolCall"]["name"].as_str().unwrap_or("").to_string());
+            ("PreToolUse", cue)
+        }
+        "PreInvocation" if opens_turn => {
+            let prompt = v["transcriptPath"]
+                .as_str()
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .map(|t| last_user_text(&t))
+                .unwrap_or_default();
+            ("UserPromptSubmit", prompt)
+        }
+        "PreInvocation" => ("PostToolUse", String::new()),
+        "Stop" => ("Stop", String::new()),
+        _ => ("TurnEnd", String::new()),
+    };
+    HookCall {
+        event: event.to_string(),
+        cue,
+        session,
+        shape: HookShape::Steps,
+    }
+}
+
+/// [`hook_call`] with the event the runner's hooks file named, for a
+/// runner whose payload does not carry one.
+#[must_use]
+pub fn hook_call_as(input: &str, event: Option<&str>) -> HookCall {
     let trimmed = input.trim();
     let Ok(v) = serde_json::from_str::<Value>(trimmed) else {
         return HookCall {
@@ -1835,6 +2080,9 @@ pub fn hook_call(input: &str) -> HookCall {
             shape: HookShape::Asks,
         };
     };
+    if v.get("conversationId").is_some() || v.get("toolCall").is_some() {
+        return steps_call(&v, event);
+    }
     let raw_event = v["hook_event_name"].as_str().unwrap_or("");
     let shape = if v.get("hookEventName").is_some() || v.get("toolInput").is_some() {
         HookShape::CamelCase
@@ -2501,6 +2749,7 @@ pub fn hook_subagent(input: &str) -> (Option<String>, bool, String) {
     let active = v["stopHookActive"]
         .as_bool()
         .or_else(|| v["stop_hook_active"].as_bool())
+        .or_else(|| v["executionNum"].as_u64().map(|n| n > 1))
         .unwrap_or(false);
     let agent = v["agent_id"]
         .as_str()
@@ -3163,6 +3412,35 @@ fn due_nudge(call: &HookCall) -> (String, Option<String>) {
     )
 }
 
+/// The answer a [`HookShape::Steps`] runner reads: always one JSON object.
+/// A tool gate's verdict is its `decision`, `ask` included, since that
+/// runner asks the person itself; no verdict is `{}`, which leaves the
+/// runner's own permissions in charge. Context is one ephemeral step.
+fn steps_output(call: &HookCall, context: &str, verdict: Option<&Rule>) -> String {
+    let out = match (call.event.as_str(), verdict) {
+        ("PreToolUse", Some(r)) => serde_json::json!({
+            "decision": r.verdict,
+            "reason": format!("{} (seat rule `{}`)", r.reason, r.pattern),
+        }),
+        ("Stop", _) | ("PreToolUse", None) | ("TurnEnd", _) => serde_json::json!({}),
+        _ if context.is_empty() => serde_json::json!({}),
+        _ => serde_json::json!({ "injectSteps": [{ "ephemeralMessage": context }] }),
+    };
+    out.to_string() + "\n"
+}
+
+/// The answer that keeps an agent going one more round with `reason`, in
+/// the runner's words for it.
+#[must_use]
+pub fn block_output(shape: HookShape, reason: &str) -> String {
+    let decision = if shape == HookShape::Steps {
+        "continue"
+    } else {
+        "block"
+    };
+    serde_json::json!({ "decision": decision, "reason": reason }).to_string()
+}
+
 /// The hook's answer in the runner's JSON: `additionalContext` under the
 /// event that fired. Empty context is no output, which the runner reads as
 /// no opinion.
@@ -3176,6 +3454,9 @@ pub fn hook_output(call: &HookCall, context: &str) -> String {
 /// prompt or an argv line the verdict is a line of text.
 #[must_use]
 pub fn hook_output_ruled(call: &HookCall, context: &str, verdict: Option<&Rule>) -> String {
+    if call.shape == HookShape::Steps {
+        return steps_output(call, context, verdict);
+    }
     if context.is_empty() && verdict.is_none() {
         return String::new();
     }
@@ -3314,7 +3595,10 @@ fn harness_rows() -> Vec<Habitat> {
             .is_some_and(|p| std::fs::read_to_string(p).is_ok_and(|t| t == skill_text()));
         if let Some(file) = &h.hooks {
             let path = expand(file);
-            let installed = hook_installed(&path, &hook_events_of(h));
+            let installed = match &h.hooks_named {
+                Some(name) => named_hook_installed(&path, name),
+                None => hook_installed(&path, &hook_events_of(h)),
+            };
             rows.push(Habitat {
                 name: "runner hook",
                 state: if installed {
@@ -13855,6 +14139,7 @@ mod tests {
             json_entry: None,
             skills: None,
             hooks: None,
+            hooks_named: None,
             hook_events: Vec::new(),
             plugin: None,
             plugin_template: None,
@@ -13897,6 +14182,90 @@ mod tests {
             lines[0]
         );
         assert!(lines[1].contains("about anything"), "{}", lines[1]);
+    }
+
+    #[test]
+    fn a_steps_runner_is_read_and_answered_in_its_own_shape() {
+        let gate = hook_call_as(
+            r#"{"toolCall":{"name":"run_command","args":{"CommandLine":"git push origin main"}},"stepIdx":4,"conversationId":"c-1"}"#,
+            Some("PreToolUse"),
+        );
+        assert_eq!(gate.shape, HookShape::Steps);
+        assert_eq!(gate.event, "PreToolUse");
+        assert_eq!(gate.cue, "git push origin main");
+        assert_eq!(gate.session.as_deref(), Some("c-1"));
+        assert!(gate.shape.asks(), "the runner asks the person itself");
+        let rule = Rule {
+            pattern: "git push*".into(),
+            verdict: "ask".into(),
+            reason: "A push is the trust gate.".into(),
+        };
+        let v: Value = serde_json::from_str(&hook_output_ruled(&gate, "", Some(&rule))).unwrap();
+        assert_eq!(v["decision"], "ask");
+        assert!(v["reason"].as_str().unwrap().contains("git push*"));
+        assert_eq!(hook_output_ruled(&gate, "", None).trim(), "{}");
+        let edit = hook_call_as(
+            r#"{"toolCall":{"name":"write_to_file","args":{"CodeContent":"git push --force"}},"conversationId":"c-1"}"#,
+            None,
+        );
+        assert_eq!(edit.cue, "write_to_file", "file text is not a command line");
+        let later = hook_call_as(
+            r#"{"invocationNum":3,"conversationId":"c-1"}"#,
+            Some("PreInvocation"),
+        );
+        assert_eq!(later.event, "PostToolUse");
+        let v: Value = serde_json::from_str(&hook_output_ruled(&later, "a note", None)).unwrap();
+        assert_eq!(v["injectSteps"][0]["ephemeralMessage"], "a note");
+        let stop = hook_call_as(r#"{"executionNum":2,"conversationId":"c-1"}"#, None);
+        assert_eq!(stop.event, "Stop");
+        assert!(
+            hook_subagent(r#"{"executionNum":2}"#).1,
+            "a second stop is a continuation"
+        );
+        let held: Value = serde_json::from_str(&block_output(HookShape::Steps, "why")).unwrap();
+        assert_eq!(held["decision"], "continue");
+        let asks: Value = serde_json::from_str(&block_output(HookShape::Asks, "why")).unwrap();
+        assert_eq!(asks["decision"], "block");
+    }
+
+    #[test]
+    fn the_last_user_turn_is_read_from_any_transcript() {
+        let t = concat!(
+            r#"{"type":"USER_INPUT","userInput":{"items":[{"text":"first ask"}]}}"#,
+            "\n",
+            r#"{"type":"PLANNER_RESPONSE","text":"working"}"#,
+            "\n",
+            r#"{"type":"USER_INPUT","userInput":{"items":[{"text":"fix the fuse box"}]}}"#,
+            "\n",
+            r#"{"type":"RUN_COMMAND","text":"ls"}"#,
+            "\n",
+        );
+        assert_eq!(last_user_text(t), "fix the fuse box");
+        assert_eq!(
+            last_user_text(r#"{"role":"user","content":"hello there"}"#),
+            "hello there"
+        );
+        assert_eq!(last_user_text("not json"), "");
+    }
+
+    #[test]
+    fn a_named_hook_file_takes_the_seats_hooks_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("hooks.json");
+        std::fs::write(&file, r#"{"lint": {"PostToolUse": []}}"#).unwrap();
+        assert!(!named_hook_installed(&file, "ljos"));
+        let step = named_hook_step(&file, "ljos", false);
+        assert!(step.ok, "{step:?}");
+        assert!(named_hook_installed(&file, "ljos"));
+        let doc: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert!(doc.get("lint").is_some(), "another hook stands");
+        assert!(doc["ljos"]["PreToolUse"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .ends_with(" hook --event PreToolUse"));
+        assert!(named_hook_step(&file, "ljos", false)
+            .detail
+            .contains("carries"));
     }
 
     #[test]

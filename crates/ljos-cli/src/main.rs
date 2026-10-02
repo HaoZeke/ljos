@@ -7,7 +7,7 @@ use ljos_cli::{
     copy_playbook, doctor, due_report, finish, forecasts_from_json, format_bump_rows,
     format_consolidation, format_doctor, format_findings, format_hits, format_hubs, format_island,
     format_personas, format_playbooks, format_readings, format_remembered, format_seat,
-    format_steps, format_write_ack, graded, habit, habits, handover, healthy, hook_call, hook_note,
+    format_steps, format_write_ack, graded, habit, habits, handover, healthy, hook_note,
     hook_output_ruled, identity_or_seat, island_entities, join, learn_anchors, learn_and_write,
     learn_reading, learn_shared, mark_seen, now_utc, on_path, onboard, pack, packset_consolidate,
     packset_forget, packset_hubs, packset_island_as, packset_search_as_of, packset_write_as, panel,
@@ -280,6 +280,10 @@ enum Cmd {
         /// Most memories to inject per call; each is injected once per session.
         #[arg(long, default_value_t = 5)]
         limit: usize,
+        /// The event, for a runner whose payload does not name it
+        /// (`PreToolUse`, `PreInvocation`, `Stop`).
+        #[arg(long)]
+        event: Option<String>,
     },
     /// DeGroot/Seldon over the pack's trust rows, then the tracker verb.
     Consensus { id: String },
@@ -775,11 +779,11 @@ fn main() -> Result<()> {
             eprintln!("ljos: {POLICY_TCB}");
             print!("{}", policy_with_memory(&argv)?);
         }
-        Cmd::Hook { limit } => {
+        Cmd::Hook { limit, event } => {
             use std::io::Read;
             let mut input = String::new();
             std::io::stdin().read_to_string(&mut input)?;
-            let call = hook_call(&input);
+            let call = ljos_cli::hook_call_as(&input, event.as_deref());
             // A context event (a prompt, a tool result) says what the seat
             // knows, and saying nothing is a correct answer; a runner that
             // cuts the hook off throws the answer away and says it failed.
@@ -825,18 +829,12 @@ fn main() -> Result<()> {
                         stop_active,
                     ) {
                         ljos_cli::mark_seen(call.session.as_deref(), &[key]);
-                        println!(
-                            "{}",
-                            serde_json::json!({"decision": "block", "reason": reason})
-                        );
+                        println!("{}", ljos_cli::block_output(call.shape, &reason));
                         return Ok(());
                     }
                 }
                 if let Some(reason) = ljos_cli::stop_audit(&input, stop_active) {
-                    println!(
-                        "{}",
-                        serde_json::json!({"decision": "block", "reason": reason})
-                    );
+                    println!("{}", ljos_cli::block_output(call.shape, &reason));
                 }
                 return Ok(());
             }
@@ -845,10 +843,7 @@ fn main() -> Result<()> {
             // one more round.
             if call.event == "Stop" && call.shape != ljos_cli::HookShape::Context {
                 if let Some(reason) = ljos_cli::stop_audit(&input, stop_active) {
-                    println!(
-                        "{}",
-                        serde_json::json!({"decision": "block", "reason": reason})
-                    );
+                    println!("{}", ljos_cli::block_output(call.shape, &reason));
                     return Ok(());
                 }
             }

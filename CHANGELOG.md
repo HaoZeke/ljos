@@ -4,6 +4,16 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
+- Antigravity's `agy` is a runner: `ljos onboard --harness antigravity`
+  registers the server in `~/.gemini/config/mcp_config.json`, writes the
+  skill under `~/.gemini/config/skills`, and puts the seat's hooks under
+  the name `ljos` in `~/.gemini/config/hooks.json`. Its payload names no
+  event, so each hook command carries `--event`: the argv law on
+  `run_command` answers `allow`, `deny` or a real `ask`; the first model
+  call of a turn reads the prompt from the transcript and injects the
+  note as an ephemeral step, later calls carry the tool-result notes;
+  `Stop` holds a turn with `decision: continue`. `hooks_named` in
+  `harnesses.toml` names a hook file of that shape.
 - `graded` takes only a claim a due page (`ljos due`, `ljos_due`, a
   sitting) showed in the last hour. A codex seat saved the 1281-row
   `ljos due` list and lapsed all 1314 claims unread in one loop. `ljos
