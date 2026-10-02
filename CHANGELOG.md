@@ -20,7 +20,7 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
   consensus --gate`) or closed as a decision, or `LJOS_CITE=ACCESSION`
   for a current deed, and the pass is noted on the issue; anyone else's
   remote, tags, a mirror or a force stay the person's. With no file no
-  push is free. Grok and codex had refused 102 pushes in 13 sessions to
+  push is free. Grok had refused 102 pushes in 13 sessions to
   the agents' own repositories under the blanket `git push*` ask.
 - A seat rule is tried on every command a shell line runs, not only on
   the line's start: `cd repo && git push` and `FOO=1 git push` meet the
