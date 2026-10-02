@@ -2,6 +2,12 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
+## 0.20.1 (2026-10-02)
+
+- The push gate counts a version tag (`v1.2`, `0.3.0`) as a release and
+  a bookmark tag as nothing; a notes repository with one
+  `campaign-sent` tag had asked for a cite on every push.
+
 ## 0.20.0 (2026-10-02)
 
 - Thinkers are seats. When a fast judge leaves a ballot or a due claim
