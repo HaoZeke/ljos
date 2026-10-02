@@ -2,6 +2,17 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
+## Unreleased
+
+- Two signals before the prompt hook speaks. A claim Jev says bears on
+  the prompt goes in when it also names a content word of the prompt,
+  or when Jev is sure alone (0.75); on a vague prompt Jev had put an
+  unrelated EESSI planning preference in at 0.61. The treat-as-data
+  note needs pasted material in the prompt (a pasted block, a fence,
+  terminal or log lines, or many lines) beside Jev's injection answer,
+  which ran 0.6 to 0.7 on plain requests; and its text lost a run of
+  spaces.
+
 ## 0.22.0 (2026-10-02)
 
 - An `ask` on a runner that cannot ask prints a request id; the person
