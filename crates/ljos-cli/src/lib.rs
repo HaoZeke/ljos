@@ -480,8 +480,12 @@ fn session_actor() -> Option<(String, String)> {
 /// that names its conversations threads. Values shorter than eight
 /// characters are ignored.
 fn runner_session_var(key: &str, val: &str) -> bool {
-    (key.ends_with("_SESSION_ID") || key.ends_with("_THREAD_ID"))
+    (key.ends_with("_SESSION_ID")
+        || key.ends_with("_THREAD_ID")
+        || key.ends_with("_CONVERSATION_ID"))
         && key != "XDG_SESSION_ID"
+        // A line editor's id for the shell, not the conversation.
+        && key != "BLE_SESSION_ID"
         && val.trim().len() >= 8
 }
 
@@ -2032,7 +2036,7 @@ pub fn last_user_text(transcript: &str) -> String {
             _ => {}
         }
     }
-    transcript
+    let raw = transcript
         .lines()
         .rev()
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
@@ -2045,7 +2049,20 @@ pub fn last_user_text(transcript: &str) -> String {
                 .max_by_key(String::len)
                 .unwrap_or_default()
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    clean_user_prompt(&raw)
+}
+
+/// The person's request out of the wrapper a runner puts around it: agy
+/// sends `<USER_REQUEST>...</USER_REQUEST>` beside metadata blocks, and
+/// only the request is a cue.
+#[must_use]
+pub fn clean_user_prompt(text: &str) -> String {
+    let t = text.trim();
+    match (t.find("<USER_REQUEST>"), t.find("</USER_REQUEST>")) {
+        (Some(a), Some(b)) if a < b => t[a + "<USER_REQUEST>".len()..b].trim().to_string(),
+        _ => t.to_string(),
+    }
 }
 
 /// A call from the runner whose payload names no event: `event` is what
@@ -12803,6 +12820,14 @@ mod tests {
         unsafe { std::env::set_var("XDG_RUNTIME_DIR", &dir) };
         assert!(runner_session_var("ACME_THREAD_ID", "0199a1b2-c3d4"));
         assert!(!runner_session_var("ACME_THREAD_ID", "short"));
+        assert!(runner_session_var(
+            "ANTIGRAVITY_CONVERSATION_ID",
+            "ad2b50da-b153-4f33-990c-65a8e2928ead"
+        ));
+        assert!(!runner_session_var(
+            "BLE_SESSION_ID",
+            "1790911378.908637/3800612"
+        ));
         // No shell has sat yet: the thread id is the holder, and recorded.
         let first = seat_for_thread("0199a1b2-aaaa-thread");
         assert_eq!(first.holder, "0199a1b2-aaaa-thread");
@@ -15413,6 +15438,12 @@ mod tests {
             "\n",
         );
         assert_eq!(last_user_text(t), "fix the fuse box");
+        assert_eq!(
+            last_user_text(
+                r#"{"type":"USER_INPUT","userInput":{"items":[{"text":"<USER_REQUEST>\nfix the fuse box\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\ntime\n</ADDITIONAL_METADATA>"}]}}"#
+            ),
+            "fix the fuse box"
+        );
         assert_eq!(
             last_user_text(r#"{"role":"user","content":"hello there"}"#),
             "hello there"
