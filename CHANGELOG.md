@@ -4,6 +4,9 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
+- `ljos upgrade` stages its download under `~/.cache/ljos`, on the home
+  filesystem; on a host whose `/tmp` is a full, quota'd tmpfs the
+  download failed with a write error.
 - The seat guard judges the command line `ssh` runs on its host as a
   command of its own: `ssh h '~/.local/bin/ljos --version'` runs the
   binary and passes, `ssh h 'cp x ~/.local/bin/ljos'` writes it and is

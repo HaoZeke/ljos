@@ -119,7 +119,15 @@ pub fn upgrade(version: Option<&str>, dir: Option<&Path>) -> Result<String> {
     };
     let asset = asset_name(&version, target);
     let base = format!("https://github.com/{RELEASE_REPO}/releases/download/v{version}");
-    let work = std::env::temp_dir().join(format!("ljos-upgrade-{}", std::process::id()));
+    // The cache directory, on the home filesystem: a temporary directory
+    // can be a quota'd tmpfs that is already full.
+    let work = std::env::var_os("XDG_CACHE_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+        .unwrap_or_else(std::env::temp_dir)
+        .join("ljos")
+        .join(format!("upgrade-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&work);
     std::fs::create_dir_all(&work)?;
     let archive = work.join(&asset);
