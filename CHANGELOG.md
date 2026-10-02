@@ -2,7 +2,7 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
-## Unreleased
+## 0.21.1 (2026-10-02)
 
 - A deny on a bare tracker verb names the exact seat command to run in
   its place, arguments carried over: `vissue claim ljos-6c3z` is told
