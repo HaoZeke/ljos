@@ -8367,25 +8367,59 @@ fn host_row() -> Habitat {
     let kills = oom_kills();
     let (servers, rss_kb) = ljos_mcp_servers();
     let mcp = format!("{servers} ljos-mcp, {} MB resident", rss_kb / 1024);
-    match kills {
-        Some(0) => Habitat {
-            name: "host",
-            state: format!("{kernel}; no OOM kills since boot; {mcp}"),
-            ok: true,
-        },
-        Some(n) => Habitat {
-            name: "host",
-            state: format!(
-                "{kernel}; {n} OOM kills since boot (/proc/vmstat oom_kill); {mcp}; \
-                 the kernel is killing processes, read `journalctl -k -b` before the load"
-            ),
-            ok: false,
-        },
-        None => Habitat {
+    let Some(n) = kills else {
+        return Habitat {
             name: "host",
             state: format!("{kernel}; {mcp}"),
             ok: true,
+        };
+    };
+    let path = runtime_dir().join("oom-seen");
+    let seen = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| parse_oom_seen(&t));
+    let (recent, keep) = oom_recent(n, seen, epoch_s());
+    let _ = std::fs::create_dir_all(runtime_dir());
+    let _ = std::fs::write(&path, format!("{} {}\n", keep.0, keep.1));
+    Habitat {
+        name: "host",
+        state: if n == 0 {
+            format!("{kernel}; no OOM kills since boot; {mcp}")
+        } else if recent {
+            format!(
+                "{kernel}; {n} OOM kills since boot, the last within a day (/proc/vmstat oom_kill); \
+                 {mcp}; the kernel is killing processes, read `journalctl -k -b` before the load"
+            )
+        } else {
+            format!("{kernel}; {n} OOM kills since boot, none in the last day; {mcp}")
         },
+        ok: !recent,
+    }
+}
+
+/// How long an OOM kill keeps the host row failing.
+pub const OOM_RECENT_S: u64 = 86_400;
+
+fn parse_oom_seen(text: &str) -> Option<(u64, u64)> {
+    let mut it = text.split_whitespace();
+    Some((it.next()?.parse().ok()?, it.next()?.parse().ok()?))
+}
+
+/// Whether the kernel's OOM count says a kill is recent, and what to keep:
+/// the count and when it last rose. The counter is cumulative since boot,
+/// so a kill counts as recent when the count rose since the last look, or
+/// rose within [`OOM_RECENT_S`]; a first look that finds kills cannot date
+/// them and counts them as recent. The record lives in the runtime
+/// directory, which a reboot clears with the counter.
+#[must_use]
+pub fn oom_recent(count: u64, seen: Option<(u64, u64)>, now: u64) -> (bool, (u64, u64)) {
+    match seen {
+        Some((was, at)) if count == was => (
+            count > 0 && now.saturating_sub(at) < OOM_RECENT_S,
+            (was, at),
+        ),
+        _ if count == 0 => (false, (0, now)),
+        _ => (true, (count, now)),
     }
 }
 
@@ -15409,6 +15443,30 @@ mod tests {
             seat_guard(&doc.cue).is_none(),
             "a doc naming the path is not the path"
         );
+    }
+
+    #[test]
+    fn an_oom_kill_keeps_the_host_row_red_for_a_day() {
+        let day = OOM_RECENT_S;
+        assert_eq!(oom_recent(0, None, 100), (false, (0, 100)));
+        assert_eq!(
+            oom_recent(5, None, 100),
+            (true, (5, 100)),
+            "kills of unknown age are recent"
+        );
+        assert_eq!(oom_recent(5, Some((5, 100)), 100 + day - 1).0, true);
+        assert_eq!(
+            oom_recent(5, Some((5, 100)), 100 + day),
+            (false, (5, 100)),
+            "a day on, the row passes"
+        );
+        assert_eq!(
+            oom_recent(6, Some((5, 100)), 100 + 2 * day),
+            (true, (6, 100 + 2 * day)),
+            "a new kill"
+        );
+        assert_eq!(parse_oom_seen("5 100\n"), Some((5, 100)));
+        assert_eq!(parse_oom_seen("junk"), None);
     }
 
     #[test]

@@ -4,6 +4,10 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
+- `ljos doctor`'s host row fails while the kernel's OOM count rises and
+  for a day after, then says how many since boot with none in the last
+  day. The counter is cumulative since boot, so one old kill had kept
+  the row red until the next reboot.
 - The prompt's due line counts what came due this week, with the
   backlog's size beside it, and says nothing when nothing new came due.
   A seat with 1263 due claims had been told so every session; the
