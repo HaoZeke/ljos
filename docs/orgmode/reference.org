@@ -110,6 +110,27 @@ stdin is an argv line and answered in plain lines.
 | =Stop= | speaks only when the turn ran no tool; with Jev on, audits the turn once from the runner's transcript |
 | =SubagentStop= | names the issue the subagent's conversation holds and asks for the ballot on a decision; with Jev on, audits the turn once |
 
+* Push gate
+
+=~/.config/ljos/push.toml= decides what an asked =git push= needs. A seat
+rule must ask about the push first (=git push*=, verdict =ask=); a deny
+stays a deny.
+
+| Key | Default | Meaning |
+|---+---+---|
+| =owners= | none | account or group names whose remotes are the person's |
+| =shared= | none | =owner/repo= globs of the person's that others push to as well |
+
+| Push | Needs |
+|---+---|
+| a branch, to an owner's repository with no tags and not =shared= | nothing; it runs |
+| a branch, to an owner's repository with tags, or =shared= | =LJOS_CITE=ISSUE= where ISSUE settles (=vissue consensus ISSUE --gate=) or closed as a decision, or =LJOS_CITE=ACCESSION= for a current deed; the pass is noted on ISSUE |
+| anyone else's remote, =--tags=, =--follow-tags=, =--mirror=, =--all=, =refs/tags/=, a force | the person runs it |
+
+With no file, no push is free. The remote is the one the command names,
+else the branch's upstream, else =origin=, read in the directory a =cd= or
+=git -C= before the push names.
+
 * Sync files
 
 | File | Holds |

@@ -4,6 +4,16 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
+- An asked `git push` is gated by where it goes. With
+  `~/.config/ljos/push.toml` naming `owners`, a branch push to an
+  unreleased repository of theirs runs; a push to one with tags, or one
+  `shared` names, runs when it cites the decision behind it,
+  `LJOS_CITE=ISSUE git push ...`, where the issue settles (`vissue
+  consensus --gate`) or closed as a decision, or `LJOS_CITE=ACCESSION`
+  for a current deed, and the pass is noted on the issue; anyone else's
+  remote, tags, a mirror or a force stay the person's. With no file no
+  push is free. Grok and codex had refused 102 pushes in 13 sessions to
+  the agents' own repositories under the blanket `git push*` ask.
 - A seat rule is tried on every command a shell line runs, not only on
   the line's start: `cd repo && git push` and `FOO=1 git push` meet the
   `git push*` rule. The line splits on `&&`, `||`, `;`, `|` and `&`

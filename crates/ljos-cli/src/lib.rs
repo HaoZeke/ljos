@@ -3494,11 +3494,21 @@ pub fn hook_output_ruled(call: &HookCall, context: &str, verdict: Option<&Rule>)
                 (
                     "deny",
                     format!(
-                        "ask the person before running this: {} (seat rule `{}`). This runner \
-                         cannot ask and the rule does not lift on a yes in chat, so retrying \
-                         returns this same refusal: stop, tell the person the exact command, \
-                         and leave it for them to run.",
-                        r.reason, r.pattern
+                        "{}{} (seat rule `{}`).{}",
+                        if r.reason.contains("LJOS_CITE=") {
+                            "this push needs a cited decision: "
+                        } else {
+                            "ask the person before running this: "
+                        },
+                        r.reason,
+                        r.pattern,
+                        if r.reason.contains("LJOS_CITE=") {
+                            " The same line does not pass again unchanged."
+                        } else {
+                            " This runner cannot ask and the rule does not lift on a yes in \
+                             chat, so retrying returns this same refusal: stop, tell the person \
+                             the exact command, and leave it for them to run."
+                        }
                     ),
                 )
             } else {
@@ -5761,6 +5771,32 @@ pub fn glob_matches(pattern: &str, line: &str) -> bool {
 /// a commit message naming a command is not that command.
 #[must_use]
 pub fn command_segments(line: &str) -> Vec<String> {
+    raw_segments(line)
+        .iter()
+        .map(|p| strip_prefixes(p).join(" "))
+        .filter(|p| !p.is_empty())
+        .collect()
+}
+
+/// A command's words with leading assignments and wrapper commands off.
+fn strip_prefixes(segment: &str) -> Vec<&str> {
+    let mut words: Vec<&str> = segment.split_whitespace().collect();
+    while let Some(w) = words.first() {
+        let assign = w.split_once('=').is_some_and(|(k, _)| {
+            !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        });
+        if assign || ["sudo", "env", "time", "nohup", "exec"].contains(w) {
+            words.remove(0);
+        } else {
+            break;
+        }
+    }
+    words
+}
+
+/// The commands of a line as written, assignments kept, split outside
+/// quotes on `&&`, `||`, `;`, `|`, `&` and new lines.
+fn raw_segments(line: &str) -> Vec<String> {
     let mut parts = Vec::new();
     let mut cur = String::new();
     let (mut single, mut double) = (false, false);
@@ -5797,24 +5833,289 @@ pub fn command_segments(line: &str) -> Vec<String> {
         i += 1;
     }
     parts.push(cur);
-    parts
-        .into_iter()
-        .map(|p| {
-            let mut words: Vec<&str> = p.split_whitespace().collect();
-            while let Some(w) = words.first() {
-                let assign = w.split_once('=').is_some_and(|(k, _)| {
-                    !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-                });
-                if assign || ["sudo", "env", "time", "nohup", "exec"].contains(w) {
-                    words.remove(0);
-                } else {
-                    break;
+    parts.into_iter().filter(|p| !p.trim().is_empty()).collect()
+}
+
+// ---- push gate -------------------------------------------------------------
+
+/// `~/.config/ljos/push.toml`: whose remotes are the person's own.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+pub struct PushPolicy {
+    /// Account or group names whose repositories are the person's.
+    #[serde(default)]
+    pub owners: Vec<String>,
+    /// `owner/repo` globs that are the person's but shared with others,
+    /// so a push to them needs a cited decision even before a release.
+    #[serde(default)]
+    pub shared: Vec<String>,
+}
+
+fn push_policy_path() -> PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+        .unwrap_or_else(|| PathBuf::from(".config"))
+        .join("ljos")
+        .join("push.toml")
+}
+
+/// The machine's push policy; none names no owner, so no push is free.
+#[must_use]
+pub fn push_policy() -> PushPolicy {
+    std::fs::read_to_string(push_policy_path())
+        .ok()
+        .and_then(|t| toml::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+/// A `git push` found in a shell line: where it runs, its arguments after
+/// `push`, and the `LJOS_CITE` it carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PushCall {
+    pub dir: Option<String>,
+    pub args: Vec<String>,
+    pub cite: Option<String>,
+}
+
+/// The first `git push` in a line, following `cd DIR` and `git -C DIR`
+/// before it.
+#[must_use]
+pub fn push_call(line: &str) -> Option<PushCall> {
+    let mut dir: Option<String> = None;
+    for seg in raw_segments(line) {
+        let cite = seg.split_whitespace().find_map(|w| {
+            w.strip_prefix("LJOS_CITE=")
+                .map(|v| v.trim_matches(|c| c == '"' || c == '\'').to_string())
+        });
+        let words = strip_prefixes(&seg);
+        match words.first().copied() {
+            Some("cd") => {
+                if let Some(d) = words.get(1) {
+                    dir = Some(d.trim_matches(|c| c == '"' || c == '\'').to_string());
                 }
             }
-            words.join(" ")
+            Some("git") => {
+                let mut i = 1;
+                let mut here = dir.clone();
+                while i < words.len() {
+                    match words[i] {
+                        "-C" => {
+                            here = words.get(i + 1).map(|d| d.to_string());
+                            i += 2;
+                        }
+                        "-c" => i += 2,
+                        w if w.starts_with('-') => i += 1,
+                        _ => break,
+                    }
+                }
+                if words.get(i) == Some(&"push") {
+                    return Some(PushCall {
+                        dir: here,
+                        args: words[i + 1..].iter().map(|w| w.to_string()).collect(),
+                        cite: cite.filter(|c| !c.is_empty()),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// `owner/repo` from a remote URL: `git@host:owner/repo.git`,
+/// `https://host/owner/repo`, `ssh://git@host/owner/repo`.
+#[must_use]
+pub fn remote_slug(url: &str) -> Option<(String, String)> {
+    let url = url.trim().trim_end_matches('/');
+    let path = if let Some((_, rest)) = url.split_once("://") {
+        rest.split_once('/')?.1
+    } else {
+        url.split_once(':')?.1
+    };
+    let path = path.trim_end_matches(".git");
+    let mut it = path.rsplitn(2, '/');
+    let repo = it.next()?.to_string();
+    let owner = it.next()?.rsplit('/').next()?.to_string();
+    (!owner.is_empty() && !repo.is_empty()).then_some((owner, repo))
+}
+
+/// How much a push needs before it runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PushTier {
+    /// A branch push to an unreleased repository of the person's own.
+    Free,
+    /// A push to the person's own repository that is released or shared:
+    /// it runs when it cites a settled decision or a current deed.
+    Cite(String),
+    /// Somebody else's remote, tags, a mirror or a force: the person runs it.
+    Person(String),
+}
+
+/// What the gate makes of a push, from its arguments, the remote's
+/// `owner/repo`, whether that repository carries release tags, and the
+/// policy. Pure, so the ladder is tested without a repository.
+#[must_use]
+pub fn push_tier(
+    args: &[String],
+    slug: Option<&(String, String)>,
+    released: bool,
+    policy: &PushPolicy,
+) -> PushTier {
+    let forced = args
+        .iter()
+        .any(|a| a == "-f" || a.starts_with("--force") || (a.starts_with('+') && a.len() > 1));
+    if forced {
+        return PushTier::Person("a force push rewrites what others may hold".into());
+    }
+    let tags = args.iter().any(|a| {
+        matches!(
+            a.as_str(),
+            "--tags" | "--follow-tags" | "--mirror" | "--all"
+        ) || a.starts_with("refs/tags/")
+    });
+    if tags {
+        return PushTier::Person("tags and mirrors publish releases".into());
+    }
+    let Some((owner, repo)) = slug else {
+        return PushTier::Person("the remote's owner could not be read".into());
+    };
+    if !policy.owners.iter().any(|o| o.eq_ignore_ascii_case(owner)) {
+        return PushTier::Person(format!(
+            "{owner}/{repo} is not under an owner in ~/.config/ljos/push.toml"
+        ));
+    }
+    let slug_text = format!("{owner}/{repo}");
+    if policy.shared.iter().any(|g| glob_matches(g, &slug_text)) {
+        return PushTier::Cite(format!("{slug_text} is shared"));
+    }
+    if released {
+        return PushTier::Cite(format!("{slug_text} has releases"));
+    }
+    PushTier::Free
+}
+
+fn git_out(dir: Option<&str>, args: &[&str]) -> Option<String> {
+    let mut cmd = std::process::Command::new("git");
+    if let Some(d) = dir {
+        cmd.arg("-C").arg(d);
+    }
+    let out = cmd
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// The tier of a push read from the repository it runs in: the remote it
+/// names (else the branch's upstream remote, else `origin`) and whether
+/// any tag exists there.
+#[must_use]
+pub fn push_tier_at(p: &PushCall, cwd: Option<&str>, policy: &PushPolicy) -> PushTier {
+    let dir: Option<String> = match (&p.dir, cwd) {
+        (Some(d), Some(c)) if !d.starts_with('/') && !d.starts_with('~') => {
+            Some(format!("{c}/{d}"))
+        }
+        (Some(d), _) => Some(d.replacen('~', &std::env::var("HOME").unwrap_or_default(), 1)),
+        (None, c) => c.map(str::to_string),
+    };
+    let dir = dir.as_deref();
+    let remote = p
+        .args
+        .iter()
+        .find(|a| !a.starts_with('-'))
+        .cloned()
+        .or_else(|| {
+            let branch = git_out(dir, &["symbolic-ref", "--short", "HEAD"])?;
+            git_out(dir, &["config", &format!("branch.{branch}.remote")])
         })
-        .filter(|p| !p.is_empty())
-        .collect()
+        .unwrap_or_else(|| "origin".into());
+    let url = git_out(dir, &["remote", "get-url", &remote]).unwrap_or(remote);
+    let slug = remote_slug(&url);
+    let released = git_out(dir, &["tag", "--list"]).is_some_and(|t| !t.is_empty());
+    push_tier(&p.args, slug.as_ref(), released, policy)
+}
+
+/// Whether a cite stands: a deed accession `deedar current` takes, or an
+/// issue whose ballots settle (`vissue consensus --gate`) or that closed
+/// as a decision. The text says what it stood on.
+pub fn cite_stands(cite: &str) -> std::result::Result<String, String> {
+    let ok = |bin: &str, args: &[&str]| {
+        std::process::Command::new(bin)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    };
+    if let Ok(v) = tracker_show_json(cite) {
+        if ok("vissue", &["consensus", cite, "--gate"]) {
+            return Ok(format!("{cite} settles"));
+        }
+        if v["state"].as_str() == Some("DONE") && is_decision(&v) {
+            return Ok(format!("{cite} closed as a decision"));
+        }
+        return Err(format!(
+            "{cite} neither settles (`vissue consensus {cite} --gate`) nor closed as a decision"
+        ));
+    }
+    if ok("deedar", &["current", cite]) {
+        return Ok(format!("deed {cite} is current"));
+    }
+    Err(format!(
+        "{cite} is neither a tracker issue nor a current deed"
+    ))
+}
+
+/// The verdict the push gate makes of a line the rules asked about: `None`
+/// lets it run. Only an `ask` on a push is gated; every other verdict, and
+/// a line with no push, is the rule's own. A cited pass is noted on the
+/// cited issue, so the record says which decision let it through.
+#[must_use]
+pub fn gate_push(rule: Option<&Rule>, line: &str, cwd: Option<&str>) -> Option<Rule> {
+    let r = rule?;
+    let Some(p) = (r.verdict == "ask").then(|| push_call(line)).flatten() else {
+        return Some(r.clone());
+    };
+    let ruled = |reason: String| Rule {
+        pattern: r.pattern.clone(),
+        verdict: "ask".into(),
+        reason,
+    };
+    match push_tier_at(&p, cwd, &push_policy()) {
+        PushTier::Free => None,
+        PushTier::Cite(why) => match p.cite.as_deref().map(cite_stands) {
+            Some(Ok(stood)) => {
+                if let Some(issue) = p.cite.as_deref().filter(|c| tracker_show_json(c).is_ok()) {
+                    let _ = run_captured(
+                        "vissue",
+                        &[
+                            "note",
+                            issue,
+                            &format!("push passed on {stood}: {}", line.trim()),
+                        ],
+                    );
+                }
+                None
+            }
+            Some(Err(e)) => Some(ruled(format!("{why}; the cite does not stand: {e}"))),
+            None => Some(ruled(format!(
+                "{why}, so the push cites the decision behind it: run it as `LJOS_CITE=ISSUE {}`, \
+                 where ISSUE settles (`vissue consensus ISSUE --gate`) or closed as a decision, \
+                 or LJOS_CITE=ACCESSION for a current deed",
+                line.trim()
+            ))),
+        },
+        PushTier::Person(why) => Some(ruled(format!(
+            "{} ({why}); the person runs this one",
+            r.reason
+        ))),
+    }
 }
 
 /// The verdict the rules give a command line: the first `deny` wins, then
@@ -10245,7 +10546,11 @@ pub fn policy_with_memory(argv: &[String]) -> Result<String> {
     // The rules are the law's memory: a deny or an ask fires before the
     // context, so a reader sees the verdict first.
     let rules = rules_from_pack().unwrap_or_default();
-    let ruled = hook_output_ruled(&call, &context, verdict_for(&rules, &line));
+    let cwd = std::env::current_dir()
+        .ok()
+        .map(|d| d.display().to_string());
+    let gated = gate_push(verdict_for(&rules, &line), &line, cwd.as_deref());
+    let ruled = hook_output_ruled(&call, &context, gated.as_ref());
     match tcb_check(argv) {
         Some(tcb) if !tcb.is_empty() => Ok(format!("{line}\n{tcb}\n{ruled}")),
         None if policyd_required() => Ok(format!("{line}\ndeny\tTCB required\n{ruled}")),
@@ -14333,6 +14638,77 @@ mod tests {
             lines[0]
         );
         assert!(lines[1].contains("about anything"), "{}", lines[1]);
+    }
+
+    #[test]
+    fn a_push_is_free_cited_or_the_persons_by_where_it_goes() {
+        let p = push_call("cd ~/Git/x && LJOS_CITE=surf-ab12 git -C sub push origin main").unwrap();
+        assert_eq!(p.dir.as_deref(), Some("sub"));
+        assert_eq!(p.args, ["origin", "main"]);
+        assert_eq!(p.cite.as_deref(), Some("surf-ab12"));
+        assert_eq!(
+            push_call("cd repo && git push").unwrap().dir.as_deref(),
+            Some("repo")
+        );
+        assert!(push_call("git commit -m 'then git push'").is_none());
+        assert_eq!(
+            remote_slug("git@github.com:HaoZeke/ljos.git"),
+            Some(("HaoZeke".into(), "ljos".into()))
+        );
+        assert_eq!(
+            remote_slug("https://gitlab.com/group/sub/proj"),
+            Some(("sub".into(), "proj".into()))
+        );
+        let policy = PushPolicy {
+            owners: vec!["haozeke".into()],
+            shared: vec!["HaoZeke/team-*".into()],
+        };
+        let mine = ("HaoZeke".to_string(), "notes".to_string());
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            push_tier(&args(&["origin", "main"]), Some(&mine), false, &policy),
+            PushTier::Free
+        );
+        assert!(matches!(
+            push_tier(&args(&[]), Some(&mine), true, &policy),
+            PushTier::Cite(_)
+        ));
+        let team = ("HaoZeke".to_string(), "team-site".to_string());
+        assert!(matches!(
+            push_tier(&args(&[]), Some(&team), false, &policy),
+            PushTier::Cite(_)
+        ));
+        let theirs = ("QMCPACK".to_string(), "qmcpack".to_string());
+        assert!(matches!(
+            push_tier(&args(&[]), Some(&theirs), false, &policy),
+            PushTier::Person(_)
+        ));
+        assert!(matches!(
+            push_tier(&args(&["--tags"]), Some(&mine), false, &policy),
+            PushTier::Person(_)
+        ));
+        assert!(matches!(
+            push_tier(&args(&["origin", "+main"]), Some(&mine), false, &policy),
+            PushTier::Person(_)
+        ));
+        assert!(
+            matches!(
+                push_tier(&args(&[]), Some(&mine), false, &PushPolicy::default()),
+                PushTier::Person(_)
+            ),
+            "no policy, no free push"
+        );
+        let deny = Rule {
+            pattern: "x".into(),
+            verdict: "deny".into(),
+            reason: "r".into(),
+        };
+        assert_eq!(
+            gate_push(Some(&deny), "git push", None),
+            Some(deny.clone()),
+            "a deny is the rule's own"
+        );
+        assert_eq!(gate_push(None, "git push", None), None);
     }
 
     #[test]

@@ -885,7 +885,28 @@ fn main() -> Result<()> {
                 } else {
                     None
                 };
-            let verdict = tcb_rule.as_ref().or_else(|| verdict_for(&rules, &call.cue));
+            // An asked push is gated by where it goes: free to the person's
+            // own unreleased repository, passed on a cited decision to a
+            // released one, the person's to run anywhere else.
+            let cwd = serde_json::from_str::<serde_json::Value>(input.trim())
+                .ok()
+                .and_then(|v| {
+                    v["cwd"]
+                        .as_str()
+                        .or_else(|| v["workspacePaths"][0].as_str())
+                        .map(str::to_string)
+                })
+                .or_else(|| {
+                    std::env::current_dir()
+                        .ok()
+                        .map(|d| d.display().to_string())
+                });
+            let gated = if tcb_rule.is_some() {
+                None
+            } else {
+                ljos_cli::gate_push(verdict_for(&rules, &call.cue), &call.cue, cwd.as_deref())
+            };
+            let verdict = tcb_rule.as_ref().or(gated.as_ref());
             // Search on the prompt. A camel-case runner discards that
             // stdout, so the note is held and emitted on the first tool
             // result. Stop additionalContext would start another round, so
