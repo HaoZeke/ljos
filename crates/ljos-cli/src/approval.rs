@@ -94,6 +94,15 @@ struct Store {
     requests: Vec<Request>,
 }
 
+impl Drop for Store {
+    fn drop(&mut self) {
+        // A child can inherit this file description until exec. Unlock it
+        // explicitly so that child cannot retain the completed transaction.
+        // SAFETY: the descriptor belongs to this store and is still open.
+        unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
+    }
+}
+
 impl Store {
     fn open(root: &Path, now: u64) -> Result<Self> {
         fs::DirBuilder::new()
@@ -458,6 +467,18 @@ mod tests {
         fs::write(root.join("requests.json"), "not json").unwrap();
         let response: Value = serde_json::from_str(&output(&original, &ask(), &root, 102)).unwrap();
         assert_eq!(response["hookSpecificOutput"]["permissionDecision"], "deny");
+    }
+
+    #[test]
+    fn a_duplicate_descriptor_does_not_retain_a_finished_transaction() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("approvals");
+        let store = Store::open(&root, 100).unwrap();
+        let inherited = store.file.try_clone().unwrap();
+        drop(store);
+        let next = Store::open(&root, 101).unwrap();
+        assert!(next.requests.is_empty());
+        drop(inherited);
     }
 
     #[test]
