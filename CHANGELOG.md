@@ -2,7 +2,7 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
-## Unreleased
+## 0.20.0 (2026-10-02)
 
 - Thinkers are seats. When a fast judge leaves a ballot or a due claim
   open, ljos hands it to the runners `[escalate]` names, each started
