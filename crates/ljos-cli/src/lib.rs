@@ -10,6 +10,7 @@ use anyhow::{bail, Context, Result};
 use packset_client::{Hit, PacksetClient};
 use serde_json::Value;
 
+pub mod approval;
 pub mod hud;
 pub mod jev;
 pub mod persona_session;
