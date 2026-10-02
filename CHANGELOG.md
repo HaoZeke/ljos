@@ -2,8 +2,14 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
-## Unreleased
+## 0.21.0 (2026-10-02)
 
+- A seat rule's trailing `*` straight after a word continues only past
+  a word boundary: `vissue claim*` meets `vissue claim X` and no longer
+  refuses the read-only `vissue claims`.
+- The docs and the example runners file name the harnesses and models a
+  persona reasons through; the example ships the `claude` and `codex`
+  shapes with their `resume` argv.
 - Thinkers are personas. `ljos persona NAME --runner RUNNER` gives a
   persona a runner, a `[[harness]]` whose new `start` and `resume` argv
   say how it opens a session and resumes the latest one in a directory,
