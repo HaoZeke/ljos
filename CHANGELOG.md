@@ -2,7 +2,7 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
-## Unreleased
+## 0.23.0 (2026-10-02)
 
 - `ljos upgrade [VERSION]` installs a published release beside the
   running `ljos`: the archive the release workflow built for the tag,
