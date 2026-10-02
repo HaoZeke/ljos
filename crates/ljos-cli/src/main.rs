@@ -201,8 +201,8 @@ enum Cmd {
         /// How this persona reads the work, in a sentence or two.
         #[arg(long)]
         view: String,
-        /// Domains it speaks to; a trust row scoped to one of them applies when the issue is about it.
-        #[arg(long, value_delimiter = ',')]
+        /// Domains it speaks to, comma-separated, repeated, or several after one flag; a trust row scoped to one of them applies when the issue is about it.
+        #[arg(long, value_delimiter = ',', num_args = 1..)]
         about: Vec<String>,
         /// The runner that thinks as this persona in a session it keeps:
         /// a runner named in harnesses.toml.

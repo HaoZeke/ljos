@@ -180,12 +180,15 @@ Every piece of work has an issue before it has a claim.
   `ljos consensus`; over MCP the `run_a_panel` prompt orders it, and
   without MCP `ljos panel ISSUE --out DIR` writes one brief per persona.
   A panel is refused until a playbook is bound (`ljos playbook ISSUE NAME`
-  or `ljos sitting ISSUE --playbook NAME`). Both seat only the personas
-  whose `--about` domains the issue's title or island names. A persona
-  with no domains sits only when no domain matches. When the pack holds
-  only specialists and none matches, the five whose views use the
-  issue's words most sit, and a panel with nobody to seat says so and
-  stops. A panel that seats everyone is a count. Model names on a
+  or `ljos sitting ISSUE --playbook NAME`). Both seat the personas whose
+  `--about` domains the issue's title or tags name. A persona the
+  issue's island reaches sits only when its own view also uses a word of
+  the title. A persona with no domains sits when no domain matches; with
+  only specialists and no match, up to five whose views use two or more
+  of the title's words sit. A panel with nobody to seat says so and
+  stops: write the voters it needs (`--about` takes one domain per flag,
+  many after it, or a comma list). A panel that seats everyone is a
+  count. Model names on a
   playbook are optional spawn hints; every member still ends with
   `ljos vote --as` then `ljos consensus`. One playbook step per
   subagent; no resume across phases. Each brief is a file to start a
@@ -198,7 +201,22 @@ Every piece of work has an issue before it has a claim.
   Writing a persona also writes one unscoped inbound trust row (the seat
   weighs it at 1, everywhere); `--about` on a later trust row only adds
   weight.
-- Progress goes on the issue, dated: `vissue note ISSUE "..."`.
+- Jev, the fast judge, answers through the vote verbs. `ljos vote ISSUE --as
+  NAME --jev` asks it for that persona's ballot and casts it when it is
+  sure (confidence 0.8 or more); when it is not, the ballot goes to the
+  persona's own session if the persona has a runner, else the command
+  names the brief to start a subagent from. `ljos panel ISSUE --jev` asks
+  for every seat at once and casts only when all are sure and agree.
+  `ljos due --judge` puts the due page to the review judges. Which judges
+  answer is `~/.config/ljos/jev.toml` (`[judges.NAME]`, `[route]`); with
+  no file the verbs say so and the subagent path answers.
+- A persona with a runner, `ljos persona NAME --runner RUNNER` where
+  RUNNER is a `[[harness]]` with a `resume` argv, reasons in a session it
+  keeps in a pane: it casts its own ballot and its memories are its own.
+  `ljos ask NAME "..."` puts a question to it in that session.
+- Progress goes on the issue, dated: `vissue note ISSUE "..."`; a longer
+  report is `vissue append ISSUE "..."` (or `--file F`); a tag is
+  `vissue update ISSUE -t TAG`.
 
 ### A bump, and a build campaign
 

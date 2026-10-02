@@ -15,14 +15,13 @@ use ljos_cli::{
     age_of, announce_seat, brief, bump_plan, calibrate, cards, claim, complete, conflicts,
     consensus_steps_for, copy_playbook, doctor, due_page, finish, forecasts_from_json,
     format_change, format_consolidation, graded, habit, habits, handover, identity_or_seat,
-    island_entities, issue_words, learn_and_write, learn_reading, now_utc, on_path, other_seat,
-    pack, packset_consolidate, packset_forget, packset_island_as, packset_search_as_of,
-    packset_write_as, panel_steps, parse_every, personas_from_pack, personas_speaking_to,
-    playbooks_from_pack, policy_with_memory, predictions_of, read_campaign, receive, release,
-    remember_findings, resolve_assignee, rows_about, run_captured, runner_pid, search_reading,
-    seat_name, sitting_gated, timeline, topic_words, tracker_show_json, trust_from_pack,
-    write_persona, write_prediction, write_rule, write_trust, Persona, Rule, Trust, CARD_NAMES,
-    LEARN_BETA, POLICY_TCB, PROTOCOL,
+    island_entities, learn_and_write, learn_reading, now_utc, on_path, other_seat, pack,
+    packset_consolidate, packset_forget, packset_island_as, packset_search_as_of, packset_write_as,
+    panel_steps, parse_every, personas_from_pack, playbooks_from_pack, policy_with_memory,
+    predictions_of, read_campaign, receive, release, remember_findings, resolve_assignee,
+    rows_about, run_captured, runner_pid, search_reading, seat_name, sitting_gated, timeline,
+    topic_words, tracker_show_json, trust_from_pack, write_persona, write_prediction, write_rule,
+    write_trust, Persona, Rule, Trust, CARD_NAMES, LEARN_BETA, POLICY_TCB, PROTOCOL,
 };
 use rmcp::{
     handler::server::wrapper::Json, handler::server::wrapper::Parameters,
@@ -1880,7 +1879,7 @@ impl LjosServer {
         // Only the personas whose domains the issue speaks to sit; a seat
         // that runs every persona on every issue is a count, not a panel.
         let all = personas_from_pack().unwrap_or_default();
-        let personas = personas_speaking_to(&all, &issue_words(&issue));
+        let personas = ljos_cli::panel_personas(&issue, &all);
         let roster = if all.is_empty() {
             "The pack holds no personas yet. Write two or three with `ljos_persona` first: a \
              name, an anchor in [0, 1] (0 never moves off its ballot), a sentence on how it \

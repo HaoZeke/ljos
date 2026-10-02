@@ -2,6 +2,21 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
+## Unreleased
+
+- A panel seats who speaks to the title. A persona its island reaches
+  sits only when its own view uses a word of the title, and the view
+  fallback needs two of the title's words: a cvmfs capability decision
+  had seated five physics and course reviewers through the island and
+  through views that say "change". A panel with nobody to seat says how
+  to write the voters it needs.
+- `ljos persona --about` takes several domains after one flag as well as
+  a comma list or the flag repeated.
+- The protocol teaches the judge verbs (`vote --jev`, `panel --jev`,
+  `due --judge`), persona sessions and `ljos ask`, and the tracker forms
+  `vissue append ISSUE "..."` and `vissue update ISSUE -t TAG`; a seat
+  had looked for a jev command and found none.
+
 ## 0.23.1 (2026-10-02)
 
 - `ljos upgrade` stages its download under `~/.cache/ljos`, on the home

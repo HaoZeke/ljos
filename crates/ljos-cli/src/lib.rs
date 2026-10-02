@@ -5457,7 +5457,90 @@ pub fn personas_speaking_to(personas: &[Persona], words: &[String]) -> Vec<Perso
         .collect()
 }
 
-/// How many specialists a panel seats by their views when no domain and no
+/// The personas a panel seats for an issue whose title and tags give
+/// `direct` and whose island gives `island`. A persona whose domain is a
+/// title word or tag sits. One a domain matches only through the island
+/// must also share a content word of the title in its own view: an island
+/// carries the pack's neighbours, and alone it seated physics reviewers on
+/// a filesystem capability question. With no domain match, the view
+/// fallback reads the title and tags only and wants two of their words in
+/// a view, not one everyday word such as "change". Nobody is a correct
+/// answer: the caller says so and names how to write a persona.
+#[must_use]
+pub fn seat_panel(
+    all: &[Persona],
+    direct: &[String],
+    island: &[String],
+    title: &str,
+) -> Vec<Persona> {
+    let first = personas_speaking_to(all, direct);
+    let by_domain = |p: &Persona, words: &[String]| {
+        p.entities
+            .iter()
+            .any(|d| words.iter().any(|w| w.eq_ignore_ascii_case(d)))
+    };
+    let direct_hits: Vec<Persona> = first
+        .iter()
+        .filter(|p| p.entities.is_empty() || by_domain(p, direct))
+        .cloned()
+        .collect();
+    if !direct_hits.is_empty() {
+        return direct_hits;
+    }
+    let through_island: Vec<Persona> = all
+        .iter()
+        .filter(|p| by_domain(p, island) && names_the_cue(&p.view, title))
+        .cloned()
+        .collect();
+    if !through_island.is_empty() {
+        return through_island;
+    }
+    let words: Vec<String> = direct
+        .iter()
+        .map(|w| w.to_lowercase())
+        .filter(|w| w.chars().count() > 3 && !is_scope_marker(w))
+        .collect();
+    let mut ranked: Vec<(usize, &Persona)> = all
+        .iter()
+        .map(|p| {
+            let view = p.view.to_lowercase();
+            let hits = words.iter().filter(|w| view.contains(w.as_str())).count();
+            (hits, p)
+        })
+        .filter(|(hits, _)| *hits >= 2)
+        .collect();
+    ranked.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.name.cmp(&b.1.name)));
+    ranked
+        .into_iter()
+        .take(PANEL_BY_VIEW)
+        .map(|(_, p)| p.clone())
+        .collect()
+}
+
+/// The words an issue's title and tags give, apart from its island.
+#[must_use]
+pub fn issue_direct_words(issue: &str) -> (String, Vec<String>) {
+    let title = issue_title(issue).unwrap_or_default();
+    let mut words = topic_words(&title);
+    if let Ok(v) = tracker_show_json(issue) {
+        words.extend(tags_of(&v));
+    }
+    (title, words)
+}
+
+/// The personas a panel on `issue` seats, by [`seat_panel`].
+pub fn panel_personas(issue: &str, all: &[Persona]) -> Vec<Persona> {
+    let (title, direct) = issue_direct_words(issue);
+    let island =
+        if packset_island(&title, false).is_ok_and(|i| !i["weak"].as_bool().unwrap_or(false)) {
+            island_entities(issue).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+    seat_panel(all, &direct, &island, &title)
+}
+
+/// How many specialists a panel seats by their views when no domain and no/// How many specialists a panel seats by their views when no domain and no
 /// generalist speaks to the issue.
 pub const PANEL_BY_VIEW: usize = 5;
 
@@ -5503,12 +5586,13 @@ pub fn panel(issue: &str, out: &Path) -> Result<String> {
         bail!("panel: the pack holds no personas; `ljos persona NAME --anchor A --view ...` writes one");
     }
     let words = issue_words(issue);
-    let personas = personas_speaking_to(&all, &words);
+    let personas = panel_personas(issue, &all);
     if personas.is_empty() {
         bail!(
             "panel: none of the {} personas speaks to {issue}: none holds its words ({}) as a \
-             domain or in its view. Tag the issue with a domain a persona holds, or write the \
-             briefs by hand with `ljos brief NAME {issue}`",
+             domain or in its view. Write the voters it needs, one domain per --about or \
+             comma-separated: `ljos persona NAME --view \"how it reads the work\" --about cvmfs,security`, \
+             or tag the issue with a domain a persona holds",
             all.len(),
             words.join(", ")
         );
@@ -5754,7 +5838,7 @@ const JEV_BRIEF_CHARS: usize = 8000;
 /// No persona speaking to the issue, and as [`jev_ballot`].
 pub fn panel_jev(issue: &str, out: &Path) -> Result<String> {
     let all = personas_from_pack()?;
-    let personas = personas_speaking_to(&all, &issue_words(issue));
+    let personas = panel_personas(issue, &all);
     if personas.is_empty() {
         bail!("panel --jev: no persona speaks to {issue}");
     }
@@ -15429,6 +15513,67 @@ mod tests {
         assert!(!is_version_tag("qmcpack-campaign-2026-08-12-sent"));
         assert!(!is_version_tag("v1"));
         assert!(!is_version_tag("latest"));
+    }
+
+    #[test]
+    fn a_panel_seats_who_speaks_to_the_title_not_the_island_s_neighbours() {
+        let mk = |name: &str, about: &[&str], view: &str| Persona {
+            name: name.into(),
+            anchor: 0.3,
+            view: view.into(),
+            entities: about.iter().map(|s| s.to_string()).collect(),
+            runner: None,
+        };
+        let all = vec![
+            mk(
+                "numericschem",
+                &["neb", "numerics"],
+                "Reads for changes that pass the tests and give wrong physics.",
+            ),
+            mk(
+                "glassphysicist",
+                &["glass", "diffuse"],
+                "Studies two-level systems in glasses.",
+            ),
+            mk(
+                "secreviewer",
+                &["capabilities", "security"],
+                "Treats any capability kept past startup as attack surface.",
+            ),
+        ];
+        let title = "decision :: post the cvmfs passthrough PR, and with which capability change";
+        let direct: Vec<String> = [
+            "decision",
+            "post",
+            "cvmfs",
+            "passthrough",
+            "capability",
+            "change",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let island: Vec<String> = ["diffuse", "numerics", "capabilities"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let seated: Vec<String> = seat_panel(&all, &direct, &island, title)
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
+        assert_eq!(
+            seated,
+            ["secreviewer"],
+            "the island seats only who also speaks to the title"
+        );
+        let none = seat_panel(&all[..2], &direct, &island, title);
+        assert!(
+            none.is_empty(),
+            "nobody is a correct answer: {:?}",
+            none.iter().map(|p| &p.name).collect::<Vec<_>>()
+        );
+        let direct_hit = seat_panel(&all, &["neb".to_string()], &[], "neb tolerance");
+        assert_eq!(direct_hit[0].name, "numericschem");
     }
 
     #[test]
