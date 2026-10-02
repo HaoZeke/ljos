@@ -199,8 +199,7 @@ hit it. =cache_days = 0= turns it off.
 Two or more judges can answer side by side. Each =[judges.NAME]= table
 names a judge. =[route]= says which judges answer each decision. Here a chat
 model on an OpenAI-compatible endpoint judges the prompt, Jev and that
-model pool their ballots, and a runner's one-shot mode reviews due
-claims:
+model pool their ballots, and the chat model reviews due claims:
 
 #+begin_src toml
 enabled = true
@@ -213,17 +212,11 @@ model = "local-120b"
 key_env = "LLM_API_KEY"
 budget_ms = 6000
 
-[judges.runner]
-backend = "command"
-command_mode = "prompt"
-command = ["omp", "-p", "--no-session", "--model", "smol"]
-budget_ms = 30000
-
 [route]
 prompt = ["chat"]
 ballot = ["default", "chat"]
 audit = ["chat"]
-review = ["runner"]
+review = ["chat"]
 #+end_src
 
 A decision with two or more judges is answered by their pool. A
@@ -235,53 +228,33 @@ question no judge answered is missing from the pool, so the caller falls
 back as it does on a partial reply. The log keeps every judge's answer
 beside the pool, so each judge can be scored once outcomes are known.
 
-Judges layer. The route's judges answer first, and they should be fast
-and calibrated: Jev, or a chat model. When their answer leaves a decision
-open, it goes on to the thinkers =[escalate]= names for it. A decision is
-open when a probability falls inside =escalate_band= (0.2 to 0.8) or a
-choice's confidence falls under =escalate_below= (0.8). A thinker is a
-runner that reasons, started in its one-shot mode as a seat of its own,
-and it works through the seat like any agent. Handed a ballot, it reads
-the issue and the pack, writes its reasoning with =vissue note=, and
-casts =ljos vote ISSUE --for OPTION --expect OPTION --as
-PERSONA-THINKER=. Consensus weighs that ballot by its trust row, and
-=learn= and =calibrate= move the row as outcomes land. Handed open due
-claims, it checks each and grades it with =ljos graded=:
+These judges are fast and calibrated, and they do not reason. A
+decision they leave open goes to a persona that does: a persona with a
+runner thinks in a session of its own.
 
-#+begin_src toml
-[judges.grok]
-backend = "command"
-command = ["grok", "-p"]
-
-[judges.omp]
-backend = "command"
-command = ["omp", "-p", "--no-session"]
-
-[judges.hermes]
-backend = "command"
-command = ["hermes", "-z"]
-
-[escalate]
-ballot = ["grok", "omp", "hermes"]
-review = ["grok"]
+#+begin_src console
+$ ljos persona buildengineer --anchor 0.25 --view "Runs production pipelines." --runner grok
+$ ljos vote surf-ab12 --as buildengineer --jev
+buildengineer: Jev leaned A at confidence 0.61, under the 0.80 cut; not cast.
+  buildengineer reasons in its own session in herdr agent persona-buildengineer; then `ljos consensus surf-ab12`
 #+end_src
 
-=ljos vote --as NAME --jev= hands an unsure ballot to every ballot
-thinker. =ljos panel --jev= hands each persona's brief to one thinker in
-turn when the panel splits. =ljos due --judge= hands the claims it left
-open to the first review thinker. Each hand-off is noted on the issue
-with the pane it runs in, and =ljos consensus ISSUE= settles once the
-ballots are in.
-
-A thinker never runs unseen. It opens in a herdr pane when herdr's
-server is up, else in a window of the tmux session =ljos-judges=. The
-pane names the thinker, shows it working, and keeps a shell open after,
-so the person can read it back, attach, or stop it. With neither herdr
-nor tmux, nothing is handed off. A judge asked for a JSON answer
-(=command_mode = "prompt"=) runs in such a pane as well, with
-=LJOS_JUDGE=1=. Under that variable the seat's hook injects nothing into
-its turn. =surface = "none"= runs that kind of judge with no pane, for
-an adapter or a test.
+The runner is a =[[harness]]= in =~/.config/ljos/harnesses.toml=. Its
+=start= and =resume= argv say how it opens a session and how it resumes
+the latest one in a directory, for example =resume = ["grok",
+"--continue"]=. It starts in a pane the person can watch and talk in: a herdr pane when herdr's
+server is up, else a window of the tmux session =ljos-personas=. It
+works in the persona's home, =$XDG_STATE_HOME/ljos/personas/NAME=, as the
+seat named after the persona. Its memories, ballots and trust rows are
+therefore the persona's. It reads the issue and the pack, writes its
+reasoning with =vissue note=, and casts =ljos vote --as NAME=. Each
+runner continues the latest session of the directory it starts in, so
+the next hand-off resumes the same conversation, and an open pane takes
+the next task in place. A task goes to the persona's inbox, and the pane
+is told the file in one line. =ljos ask NAME "..."= puts a question to
+the persona the same way. =ljos panel --jev= hands each unsure persona's
+brief to its own session when the panel splits. A persona with no runner
+gets a brief for a subagent, as before.
 
 =ljos due --judge= puts the due page to the =review= judges. Each claim
 goes with the newer claims the pack keeps on the same subject. A claim
@@ -552,7 +525,8 @@ reading get both. A note on the issue says the ballot came from Jev.
 
 Jev's confidence measures how spread out its probabilities are. Under
 =escalate_below= (0.8), =vote --jev= does not cast. It notes Jev's lean
-and names the brief to start a subagent from.
+and hands the ballot to the persona's own session when the persona has
+a runner, else names the brief to start a subagent from.
 
 A panel casts only when every seated persona is sure and all agree.
 Personas answered by one model are correlated voters, so their agreement

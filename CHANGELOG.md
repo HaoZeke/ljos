@@ -2,6 +2,27 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
+## Unreleased
+
+- Thinkers are personas. `ljos persona NAME --runner RUNNER` gives a
+  persona a runner, a `[[harness]]` whose new `start` and `resume` argv
+  say how it opens a session and resumes the latest one in a directory,
+  that reasons as it in a session it keeps: a herdr pane or a window of the tmux session
+  `ljos-personas`, working in `$XDG_STATE_HOME/ljos/personas/NAME` as
+  the seat named after the persona, so its memories, ballots and trust
+  rows are the persona's. The runner resumes the latest session of that
+  directory, so a later hand-off resumes the conversation, and an
+  open pane takes the next task in place. `vote --jev` and `panel
+  --jev` hand an unsure persona's ballot to its own session; `ljos ask
+  NAME "..."` puts a question to it. The 0.19 and 0.20 thinker roster
+  (`[escalate]`, `escalate_band`, `command_mode = "prompt"`, `surface`,
+  `PERSONA-THINKER` voters) is gone, and so is the review hand-off from
+  `due --judge`.
+- Repository facts are pack claims. The push gate asks `gh` once per
+  repository and remembers the answer as a standing claim on
+  `repo:OWNER/REPO`; later pushes read the pack. The runtime cache and
+  `push.toml` are gone.
+
 ## 0.20.1 (2026-10-02)
 
 - The push gate counts a version tag (`v1.2`, `0.3.0`) as a release and

@@ -26,17 +26,9 @@
 //! top-level keys are the judge named `default`, which answers every
 //! decision no route names.
 //!
-//! Judges layer. The route's judges answer first: fast and calibrated,
-//! Jev or a chat model. When their answer leaves a decision open, a
-//! probability inside `escalate_band` or a choice under `escalate_below`,
-//! the caller hands it to the thinkers `[escalate]` names: runners that
-//! reason, started in a pane the person can watch ([`dispatch`]) as seats
-//! of their own. A thinker does the work through the seat like any agent,
-//! a note for its reasoning and `ljos vote` or `ljos graded` for its
-//! verdict, so consensus weighs it by its trust rows and `learn` and
-//! `calibrate` move them. A judge asked for a JSON answer runs with
-//! `LJOS_JUDGE=1`, under which the seat's hook stays quiet; a thinker
-//! does not, since it is a seat.
+//! These judges are fast and calibrated, and they do not reason. A
+//! decision they leave open goes to the personas: each with a runner of
+//! its own, in a session it keeps (see `persona_session`).
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -76,38 +68,6 @@ impl Backend {
     }
 }
 
-/// How the `command` backend talks to its argv.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum CommandMode {
-    /// The request JSON on stdin, `{"answers": ...}` on stdout.
-    #[default]
-    Request,
-    /// The questions as one prompt, the last argument, and the first JSON
-    /// object in what it prints: a harness's one-shot mode (`omp -p`,
-    /// `grok -p`, `hermes -z`) judges with no adapter.
-    Prompt,
-}
-
-/// Where a runner asked for a judgment runs. A thinker is never opaque:
-/// it runs in a pane the person can watch, read back and stop.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Surface {
-    /// herdr when its server is up, else tmux, else the judge abstains.
-    #[default]
-    Auto,
-    /// A herdr pane.
-    Herdr,
-    /// A window in the tmux session `ljos-judges`.
-    Tmux,
-    /// A child process with no pane; only for adapters and tests.
-    None,
-}
-
-/// The tmux session thinkers open windows in.
-pub const JUDGE_SESSION: &str = "ljos-judges";
-
 /// One judge: where a decision is sent and how.
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Judge {
@@ -115,11 +75,6 @@ pub struct Judge {
     pub backend: Backend,
     #[serde(default)]
     pub command: Option<Vec<String>>,
-    #[serde(default)]
-    pub command_mode: CommandMode,
-    /// Where a prompt-mode judge runs: `auto`, `herdr`, `tmux` or `none`.
-    #[serde(default)]
-    pub surface: Surface,
     #[serde(default)]
     pub key_file: Option<String>,
     #[serde(default)]
@@ -144,22 +99,6 @@ fn default_weight() -> f64 {
     1.0
 }
 
-fn default_band() -> [f64; 2] {
-    [0.2, 0.8]
-}
-
-/// Whether a pooled answer leaves a decision open: a probability inside
-/// the band, or a choice whose confidence is under `below`.
-#[must_use]
-pub fn unsure(answers: &Value, band: [f64; 2], below: f64) -> bool {
-    answers.as_object().into_iter().flatten().any(|(_, a)| {
-        a["noul"]
-            .as_f64()
-            .is_some_and(|p| p >= band[0] && p <= band[1])
-            || a["confidence"].as_f64().is_some_and(|c| c < below)
-    })
-}
-
 /// The decisions a route can name, and the log kind each is asked under.
 pub const DECISIONS: &[(&str, &str)] = &[
     ("prompt", "hook"),
@@ -181,12 +120,6 @@ pub struct Config {
     /// stdin and prints `{"answers": ...}` on stdout inside `budget_ms`.
     #[serde(default)]
     pub command: Option<Vec<String>>,
-    /// How the `command` backend is spoken to: `request` or `prompt`.
-    #[serde(default)]
-    pub command_mode: CommandMode,
-    /// Where the default judge runs in prompt mode.
-    #[serde(default)]
-    pub surface: Surface,
     /// An environment variable holding the key.
     #[serde(default)]
     pub key_env: Option<String>,
@@ -198,12 +131,6 @@ pub struct Config {
     /// `default`.
     #[serde(default)]
     pub route: BTreeMap<String, Vec<String>>,
-    /// The thinkers a decision goes on to when the route's pool is unsure.
-    #[serde(default)]
-    pub escalate: BTreeMap<String, Vec<String>>,
-    /// The probabilities a pool is unsure inside, ends included.
-    #[serde(default = "default_band")]
-    pub escalate_band: [f64; 2],
     /// A file holding the key, one line, mode 0600.
     #[serde(default)]
     pub key_file: Option<String>,
@@ -402,8 +329,6 @@ impl Config {
         Judge {
             backend: self.backend,
             command: self.command.clone(),
-            command_mode: self.command_mode,
-            surface: self.surface,
             key_file: self.key_file.clone(),
             key_cmd: self.key_cmd.clone(),
             key_env: self.key_env.clone(),
@@ -465,12 +390,6 @@ fn usable(name: &str, j: &Judge) -> Option<String> {
 #[must_use]
 pub fn judges_for(cfg: &Config, decision: &str) -> Vec<(String, Judge, String)> {
     named_judges(cfg, cfg.route_of(decision))
-}
-
-/// The thinkers `[escalate]` names for `decision`, each with its key.
-#[must_use]
-pub fn thinkers_for(cfg: &Config, decision: &str) -> Vec<(String, Judge, String)> {
-    named_judges(cfg, cfg.escalate.get(decision).cloned().unwrap_or_default())
 }
 
 fn named_judges(cfg: &Config, names: Vec<String>) -> Vec<(String, Judge, String)> {
@@ -883,18 +802,6 @@ fn content_json(reply: &Value) -> Option<Value> {
     text_json(reply["choices"][0]["message"]["content"].as_str()?)
 }
 
-/// The questions as one prompt for a harness's one-shot mode: the answer
-/// shape, then the state and the questions.
-#[must_use]
-pub fn prompt_text(body: &Value) -> String {
-    let state = body["state"].as_str().unwrap_or("");
-    let questions = serde_json::to_string_pretty(&body["questions"]).unwrap_or_default();
-    format!(
-        "{CHAT_SYSTEM} Beside \"answers\", put \"why\": two sentences on what decided it. \
-         Use no tools and change nothing; print only the JSON object.\n\nState:\n{state}\n\nQuestions:\n{questions}\n"
-    )
-}
-
 /// The first JSON object in `text`, a code fence stripped.
 #[must_use]
 pub fn text_json(text: &str) -> Option<Value> {
@@ -1018,34 +925,6 @@ fn command_post(cfg: &Judge, body: &Value) -> Option<Value> {
     let argv = cfg.command.as_deref()?;
     let (prog, args) = argv.split_first()?;
     let secs = (cfg.budget_ms.div_ceil(1000)).max(1);
-    if cfg.command_mode == CommandMode::Prompt && cfg.surface != Surface::None {
-        let text = surfaced_run(cfg, argv, &prompt_text(body), secs)?;
-        let content = text_json(&text)?;
-        let answers = chat_answers(body, &content);
-        let why = content["why"].as_str().unwrap_or("").to_string();
-        return (!answers.as_object()?.is_empty())
-            .then(|| serde_json::json!({"answers": answers, "why": why}));
-    }
-    if cfg.command_mode == CommandMode::Prompt {
-        let out = std::process::Command::new("timeout")
-            .arg(secs.to_string())
-            .arg(prog)
-            .args(args)
-            .arg(prompt_text(body))
-            .env("LJOS_JUDGE", "1")
-            .stdin(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .output()
-            .ok()?;
-        if !out.status.success() {
-            return None;
-        }
-        let content = text_json(&String::from_utf8_lossy(&out.stdout))?;
-        let answers = chat_answers(body, &content);
-        let why = content["why"].as_str().unwrap_or("").to_string();
-        return (!answers.as_object()?.is_empty())
-            .then(|| serde_json::json!({"answers": answers, "why": why}));
-    }
     let mut child = std::process::Command::new("timeout")
         .arg(secs.to_string())
         .arg(prog)
@@ -1068,237 +947,6 @@ fn command_post(cfg: &Judge, body: &Value) -> Option<Value> {
     let content: Value = serde_json::from_slice(&out.stdout).ok()?;
     let answers = chat_answers(body, &content);
     (!answers.as_object()?.is_empty()).then(|| serde_json::json!({"answers": answers}))
-}
-
-/// A word quoted for `sh`.
-fn sq(word: &str) -> String {
-    format!("'{}'", word.replace('\'', "'\\''"))
-}
-
-/// The script a surfaced judge runs in its pane: it names itself, runs the
-/// runner on the prompt file under `LJOS_JUDGE=1` inside `secs`, copies
-/// what it prints to `out`, writes the exit status to `done`, and leaves a
-/// shell in the pane so the person can read and carry on.
-#[must_use]
-pub fn judge_script(
-    name: &str,
-    argv: &[String],
-    prompt: &str,
-    out: &str,
-    done: &str,
-    secs: u64,
-) -> String {
-    let cmd: Vec<String> = argv.iter().map(|a| sq(a)).collect();
-    format!(
-        "#!/bin/sh\nprintf '\\033]2;ljos judge %s\\007' {n}\necho \"ljos judge {name}: $(date), {secs}s; the prompt is {p}\"\n\
-         {{ LJOS_JUDGE=1 timeout {secs} {cmd} \"$(cat {p})\"; echo $? > {d}; }} 2>&1 | tee {o}\n\
-         echo \"ljos judge {name} finished with $(cat {d}); this pane stays for reading\"\n\
-         exec \"${{SHELL:-/bin/sh}}\" -i\n",
-        n = sq(name),
-        p = sq(prompt),
-        d = sq(done),
-        o = sq(out),
-        cmd = cmd.join(" "),
-    )
-}
-
-/// Which pane system a surface resolves to here; `None` when there is
-/// none to open, and the judge then abstains rather than run unseen.
-#[must_use]
-pub fn resolve_surface(s: Surface) -> Option<Surface> {
-    let herdr_up = || {
-        which::which("herdr").is_ok()
-            && std::process::Command::new("herdr")
-                .args(["status", "server"])
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .is_ok_and(|st| st.success())
-    };
-    let tmux = || which::which("tmux").is_ok();
-    match s {
-        Surface::None => Some(Surface::None),
-        Surface::Herdr => herdr_up().then_some(Surface::Herdr),
-        Surface::Tmux => tmux().then_some(Surface::Tmux),
-        Surface::Auto if herdr_up() => Some(Surface::Herdr),
-        Surface::Auto => tmux().then_some(Surface::Tmux),
-    }
-}
-
-/// Run a prompt-mode judge in a pane and read back what it printed, inside
-/// `secs` and a few seconds to open the pane. A pane the person closed or
-/// stopped leaves no answer, and the judge abstains.
-fn surfaced_run(j: &Judge, argv: &[String], prompt: &str, secs: u64) -> Option<String> {
-    let surface = resolve_surface(j.surface)?;
-    let dir = std::env::var_os("XDG_RUNTIME_DIR")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("ljos")
-        .join("judges");
-    std::fs::create_dir_all(&dir).ok()?;
-    let name = argv
-        .first()
-        .and_then(|p| std::path::Path::new(p).file_name())
-        .map_or_else(|| "judge".to_string(), |n| n.to_string_lossy().into_owned());
-    let id = format!(
-        "{name}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis())
-    );
-    let file = |ext: &str| dir.join(format!("{id}.{ext}"));
-    let (prompt_f, out_f, done_f, script_f) =
-        (file("prompt"), file("out"), file("done"), file("sh"));
-    std::fs::write(&prompt_f, prompt).ok()?;
-    let script = judge_script(
-        &name,
-        argv,
-        &prompt_f.display().to_string(),
-        &out_f.display().to_string(),
-        &done_f.display().to_string(),
-        secs,
-    );
-    std::fs::write(&script_f, script).ok()?;
-    if !open_pane(surface, &id, &dir, &script_f.display().to_string()) {
-        return None;
-    }
-    let deadline = std::time::Instant::now() + Duration::from_secs(secs + 5);
-    while std::time::Instant::now() < deadline {
-        if let Ok(code) = std::fs::read_to_string(&done_f) {
-            if code.trim() != "0" {
-                return None;
-            }
-            return std::fs::read_to_string(&out_f).ok();
-        }
-        std::thread::sleep(Duration::from_millis(250));
-    }
-    None
-}
-
-/// Open a pane named `id` running `sh SCRIPT` in `dir`: a herdr agent pane,
-/// or a window of the tmux session [`JUDGE_SESSION`]. Whether it opened.
-fn open_pane(surface: Surface, id: &str, dir: &std::path::Path, script: &str) -> bool {
-    let quiet = |c: &mut std::process::Command| {
-        c.stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .is_ok_and(|st| st.success())
-    };
-    let tmux = |args: &[&str]| quiet(std::process::Command::new("tmux").args(args));
-    match surface {
-        Surface::Herdr => quiet(
-            std::process::Command::new("herdr")
-                .args([
-                    "agent",
-                    "start",
-                    &format!("ljos-{id}"),
-                    "--no-focus",
-                    "--cwd",
-                ])
-                .arg(dir)
-                .args(["--", "sh", script]),
-        ),
-        Surface::Tmux if tmux(&["has-session", "-t", JUDGE_SESSION]) => tmux(&[
-            "new-window",
-            "-d",
-            "-t",
-            JUDGE_SESSION,
-            "-n",
-            id,
-            "sh",
-            script,
-        ]),
-        Surface::Tmux => tmux(&[
-            "new-session",
-            "-d",
-            "-s",
-            JUDGE_SESSION,
-            "-n",
-            id,
-            "sh",
-            script,
-        ]),
-        Surface::None | Surface::Auto => false,
-    }
-}
-
-/// The script a thinker runs in its pane: the runner on the task file as
-/// the seat `seat`, then a shell left open for the person.
-#[must_use]
-pub fn thinker_script(seat: &str, argv: &[String], task: &str) -> String {
-    let cmd: Vec<String> = argv.iter().map(|a| sq(a)).collect();
-    format!(
-        "#!/bin/sh\nprintf '\\033]2;ljos thinker %s\\007' {s}\necho \"ljos thinker {seat}: $(date); the task is {t}\"\n\
-         LJOS_SEAT={s} {cmd} \"$(cat {t})\"\n\
-         echo \"ljos thinker {seat} finished; this pane stays for reading\"\n\
-         exec \"${{SHELL:-/bin/sh}}\" -i\n",
-        s = sq(seat),
-        t = sq(task),
-        cmd = cmd.join(" "),
-    )
-}
-
-/// Hand `task` to the thinker `name` in a pane of its own, as a seat that
-/// works through ljos. Returns where it runs; `None` when the thinker has
-/// no command or no pane could open, since a thinker never runs unseen.
-#[must_use]
-pub fn dispatch(name: &str, j: &Judge, task: &str) -> Option<String> {
-    let argv = j.command.as_deref().filter(|a| !a.is_empty())?;
-    let surface = resolve_surface(match j.surface {
-        Surface::None => Surface::Auto,
-        s => s,
-    })?;
-    let dir = std::env::var_os("XDG_RUNTIME_DIR")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("ljos")
-        .join("thinkers");
-    std::fs::create_dir_all(&dir).ok()?;
-    let id = format!(
-        "thinker-{name}-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis())
-    );
-    let task_f = dir.join(format!("{id}.task"));
-    let script_f = dir.join(format!("{id}.sh"));
-    std::fs::write(&task_f, task).ok()?;
-    std::fs::write(
-        &script_f,
-        thinker_script(name, argv, &task_f.display().to_string()),
-    )
-    .ok()?;
-    open_pane(surface, &id, &dir, &script_f.display().to_string()).then(|| match surface {
-        Surface::Herdr => format!("herdr pane ljos-{id}"),
-        _ => format!("tmux {JUDGE_SESSION}:{id}"),
-    })
-}
-
-/// The thinkers configured for `decision`: a thinker is a runner with a
-/// login of its own, so no key is asked for.
-#[must_use]
-pub fn thinkers(decision: &str) -> Vec<(String, Judge)> {
-    let Some(cfg) = read_config() else {
-        return Vec::new();
-    };
-    cfg.escalate
-        .get(decision)
-        .into_iter()
-        .flatten()
-        .filter_map(|n| Some((n.clone(), cfg.judge(n)?)))
-        .filter(|(_, j)| j.command.as_ref().is_some_and(|c| !c.is_empty()))
-        .collect()
-}
-
-/// The machine's band and cut for an unsure answer.
-#[must_use]
-pub fn unsure_cut() -> ([f64; 2], f64) {
-    read_config().map_or(([0.2, 0.8], 0.8), |c| (c.escalate_band, c.escalate_below))
 }
 
 /// Ask Jev about one prompt, inside the configured budget.
@@ -1996,103 +1644,6 @@ mod tests {
             ],
         );
         assert!((agree["q"]["noul"].as_f64().unwrap() - 0.8).abs() < 1e-9);
-    }
-
-    #[test]
-    fn a_harness_judges_from_a_prompt_and_its_printed_json() {
-        let j: Judge = toml::from_str(
-            "backend = \"command\"\ncommand_mode = \"prompt\"\nsurface = \"none\"\ncommand = [\"sh\", \"-c\", \"echo 'thinking...'; echo '```json'; echo '{\\\"holds\\\": 0.95}'; echo '```'\"]\n",
-        )
-        .unwrap();
-        let body = review_request("m", "packset caps rerank input at 192 tokens", &[]);
-        assert!(prompt_text(&body).contains("Stored claim under review"));
-        let reply = command_post(&j, &body).unwrap();
-        assert!((reply["answers"]["holds"]["noul"].as_f64().unwrap() - 0.95).abs() < 1e-9);
-        assert_eq!(text_json("noise {\"a\": 1} tail").unwrap()["a"], 1);
-    }
-
-    #[test]
-    fn an_unsure_pool_goes_on_to_the_thinkers() {
-        let band = [0.2, 0.8];
-        assert!(unsure(&serde_json::json!({"q": {"noul": 0.5}}), band, 0.8));
-        assert!(!unsure(
-            &serde_json::json!({"q": {"noul": 0.95}}),
-            band,
-            0.8
-        ));
-        assert!(unsure(
-            &serde_json::json!({"c": {"choice": "A", "confidence": 0.4}}),
-            band,
-            0.8
-        ));
-        assert!(!unsure(
-            &serde_json::json!({"c": {"choice": "A", "confidence": 0.9}}),
-            band,
-            0.8
-        ));
-        let cfg: Config = toml::from_str(concat!(
-            "enabled = true\nbackend = \"command\"\ncommand = [\"true\"]\n",
-            "[judges.grok]\nbackend = \"command\"\ncommand_mode = \"prompt\"\ncommand = [\"true\"]\n",
-            "[escalate]\nreview = [\"grok\"]\n",
-        ))
-        .unwrap();
-        assert_eq!(cfg.escalate_band, [0.2, 0.8]);
-        let names: Vec<String> = thinkers_for(&cfg, "review")
-            .into_iter()
-            .map(|j| j.0)
-            .collect();
-        assert_eq!(names, ["grok"]);
-        assert!(thinkers_for(&cfg, "ballot").is_empty());
-    }
-
-    #[test]
-    fn a_thinker_says_why() {
-        let j: Judge = toml::from_str(
-            "backend = \"command\"\ncommand_mode = \"prompt\"\nsurface = \"none\"\ncommand = [\"sh\", \"-c\", \"test \\\"$LJOS_JUDGE\\\" = 1 && echo '{\\\"answers\\\": {\\\"holds\\\": 0.3}, \\\"why\\\": \\\"a newer claim moved it\\\"}'\"]\n",
-        )
-        .unwrap();
-        let body = review_request("m", "claim", &["newer"]);
-        let reply = command_post(&j, &body).expect("the child sees LJOS_JUDGE=1");
-        assert_eq!(reply["why"], "a newer claim moved it");
-        assert!(prompt_text(&body).contains("\"why\""));
-    }
-
-    #[test]
-    fn a_surfaced_judge_runs_in_a_pane_it_names_and_leaves_open() {
-        let j: Judge = toml::from_str(
-            "backend = \"command\"\ncommand_mode = \"prompt\"\ncommand = [\"grok\", \"-p\"]\n",
-        )
-        .unwrap();
-        assert_eq!(
-            j.surface,
-            Surface::Auto,
-            "a thinker is surfaced unless told otherwise"
-        );
-        let script = judge_script(
-            "grok",
-            &["grok".into(), "-p".into()],
-            "/r/p.prompt",
-            "/r/p.out",
-            "/r/p.done",
-            90,
-        );
-        assert!(script.contains("LJOS_JUDGE=1 timeout 90 'grok' '-p' \"$(cat '/r/p.prompt')\""));
-        assert!(script.contains("| tee '/r/p.out'"));
-        assert!(script.contains("echo $? > '/r/p.done'"));
-        assert!(
-            script.trim_end().ends_with("-i"),
-            "the pane stays for the person"
-        );
-        assert_eq!(sq("it's"), "'it'\\''s'");
-        assert_eq!(resolve_surface(Surface::None), Some(Surface::None));
-    }
-
-    #[test]
-    fn a_thinker_is_a_seat_in_a_pane() {
-        let script = thinker_script("grok", &["grok".into(), "-p".into()], "/r/t.task");
-        assert!(script.contains("LJOS_SEAT='grok' 'grok' '-p' \"$(cat '/r/t.task')\""));
-        assert!(!script.contains("LJOS_JUDGE"), "a thinker hears the seat");
-        assert!(script.trim_end().ends_with("-i"));
     }
 
     #[test]

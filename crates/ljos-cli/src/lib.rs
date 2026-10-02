@@ -12,6 +12,7 @@ use serde_json::Value;
 
 pub mod hud;
 pub mod jev;
+pub mod persona_session;
 pub mod sync;
 
 /// Working-core files this seat will print. Nothing else, and never write.
@@ -114,6 +115,14 @@ pub struct Harness {
     /// scattering over `acme` and `acme-mcp-client`.
     #[serde(default)]
     pub clients: Vec<String>,
+    /// How the runner starts in a persona's home for a session the person
+    /// can talk in; the runner's name alone when unset.
+    #[serde(default)]
+    pub start: Vec<String>,
+    /// How it resumes the latest session of the directory it starts in,
+    /// so a persona's next hand-off continues its conversation.
+    #[serde(default)]
+    pub resume: Vec<String>,
 }
 
 /// The plugins `ljos` carries for runners whose hooks are code, by name.
@@ -258,6 +267,7 @@ marker = "\n  ljos:\n    command:"
 skills = "~/.hermes/skills"
 # A hermes installed without its MCP extra lists ljos and loads nothing.
 probe = ["hermes", "mcp", "test", "ljos"]
+resume = ["hermes", "--continue"]
 
 [[harness]]
 name = "omp"
@@ -269,6 +279,7 @@ json_entry = '{"type": "stdio", "command": "{server}", "args": []}'
 skills = "~/.omp/agent/skills"
 plugin = "~/.omp/agent/extensions/ljos.ts"
 plugin_template = "omp"
+resume = ["omp", "--continue"]
 
 [[harness]]
 name = "antigravity"
@@ -280,6 +291,8 @@ json_entry = '{"command": "{server}", "args": [], "env": {"LJOS_SEAT": "{name}"}
 skills = "~/.gemini/config/skills"
 hooks = "~/.gemini/config/hooks.json"
 hooks_named = "ljos"
+start = ["agy"]
+resume = ["agy", "--continue"]
 
 [[harness]]
 name = "grok"
@@ -287,6 +300,9 @@ config = "~/.grok/config.toml"
 marker = "[mcp_servers.ljos]"
 snippet = "\n[mcp_servers.ljos]\ncommand = \"{server}\"\nargs = []\nenabled = true\n"
 skills = "~/.grok/skills"
+# A persona reasoning through this runner resumes the latest session of
+# its home directory with this argv.
+resume = ["grok", "--continue"]
 "#;
 
 fn home() -> Result<PathBuf> {
@@ -4284,12 +4300,15 @@ pub struct Trust {
 /// A voter with a view of its own: a persona. `anchor` in `[0, 1]` is how
 /// far it moves off its ballot in a settle; 0 never moves, 1 is a plain
 /// DeGroot voter. `entities` are the domains it speaks to.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Persona {
     pub name: String,
     pub anchor: f64,
     pub view: String,
     pub entities: Vec<String>,
+    /// The runner that thinks as this persona, in a session of its own
+    /// (`persona_session`); none leaves its ballots to a subagent's brief.
+    pub runner: Option<String>,
 }
 
 /// The `persona` atom for the pack: kind `persona`, the view as text.
@@ -4314,6 +4333,17 @@ pub fn persona_atom(p: &Persona, workspace: &str) -> Result<Value> {
     atom["anchor"] = serde_json::json!(p.anchor);
     if !p.entities.is_empty() {
         add_entities(&mut atom, p.entities.iter().map(|e| e.to_lowercase()));
+    }
+    if let Some(r) = p.runner.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
+        let names = persona_session::runner_names();
+        if !names.is_empty() && !names.iter().any(|n| n == r) {
+            bail!(
+                "persona: runner {r:?} is not a [[harness]] in {}; it names {}",
+                harnesses_path().display(),
+                names.join(", ")
+            );
+        }
+        atom["runner"] = Value::String(r.into());
     }
     Ok(atom)
 }
@@ -4415,6 +4445,10 @@ pub fn personas_of(atoms: &[Value]) -> Vec<Persona> {
                 .unwrap_or("")
                 .to_string(),
             entities: domains_of(atom.get("entities")),
+            runner: atom
+                .get("runner")
+                .and_then(Value::as_str)
+                .map(str::to_string),
         };
         match latest.get(name) {
             Some((seen, _)) if *seen > ts => {}
@@ -5469,45 +5503,62 @@ pub fn jev_vote(name: &str, issue: &str) -> Result<JevVote> {
     Ok(JevVote::Cast(b))
 }
 
-/// What a thinker is asked to do with a persona's ballot: the brief,
-/// then how the verdict reaches the seat. It votes under a name of its
-/// own, `PERSONA-THINKER`, so its trust row is its own.
+/// What a persona's runner is asked to do with its ballot: the brief,
+/// then how the verdict reaches the seat, under the persona's own name.
 #[must_use]
-pub fn thinker_ballot_task(brief: &str, persona: &str, thinker: &str, issue: &str) -> String {
+pub fn persona_ballot_task(brief: &str, persona: &str, issue: &str) -> String {
     format!(
-        "{brief}\n\nYou are the thinker {thinker}, asked for this ballot because a fast judge \
-         was not sure. Work through the seat: read `vissue show {issue}` and what the pack \
-         holds (`ljos search \"...\"`). Write your reasoning in two or three sentences with \
-         `vissue note {issue} \"{persona}-{thinker}: ...\"`, then cast \
-         `ljos vote {issue} --for OPTION --expect OPTION --as {persona}-{thinker} --used none` \
-         (name the deeds you used instead of none). Do not open a sitting, change files or \
-         push; the ballot and the note are the whole task."
+        "{brief}\n\nYou are {persona}. A fast judge was not sure of your ballot on {issue}, so \
+         it is yours to reason. Read `vissue show {issue}` and what the pack holds \
+         (`ljos search \"...\"`). Write your reasoning in two or three sentences with \
+         `vissue note {issue} \"{persona}: ...\"`, then cast \
+         `ljos vote {issue} --for OPTION --expect OPTION --as {persona} --used none` (name the \
+         deeds you used instead of none). A lesson that will hold next time is \
+         `ljos remember \"...\" --as {persona}`. Do not open a sitting, change files or push."
     )
 }
 
-/// Hand an open ballot to the configured thinkers, one pane each, and note
-/// on the issue where they run. Returns the panes.
-pub fn dispatch_ballot(
-    persona: &str,
-    issue: &str,
-    thinkers: &[(String, jev::Judge)],
-) -> Vec<String> {
-    let Ok(text) = brief(persona, issue) else {
-        return Vec::new();
-    };
-    let mut panes = Vec::new();
-    for (name, j) in thinkers {
-        if let Some(pane) =
-            jev::dispatch(name, j, &thinker_ballot_task(&text, persona, name, issue))
-        {
+/// Hand a persona's open ballot to its own session, and note on the
+/// issue where it runs. `None` for a persona with no runner, whose ballot
+/// stays a brief for a subagent.
+pub fn hand_ballot(p: &Persona, issue: &str) -> Option<String> {
+    let runner = p.runner.as_deref()?;
+    let text = brief(&p.name, issue).ok()?;
+    let task = persona_ballot_task(&text, &p.name, issue);
+    match persona_session::hand(&p.name, runner, &task) {
+        Ok(pane) => {
             note_jev(
                 issue,
-                &format!("{persona}: ballot handed to the thinker {name} in {pane}"),
+                &format!(
+                    "{}: ballot handed to its own session ({runner}) in {pane}",
+                    p.name
+                ),
             );
-            panes.push(pane);
+            Some(pane)
+        }
+        Err(e) => {
+            note_jev(issue, &format!("{}: hand-off failed: {e:#}", p.name));
+            None
         }
     }
-    panes
+}
+
+/// `ljos ask NAME TEXT`: the persona's own session takes the question,
+/// in its open pane or one that continues its session.
+///
+/// # Errors
+///
+/// No such persona, or one with no runner.
+pub fn ask_persona(name: &str, text: &str) -> Result<String> {
+    let p = personas_from_pack()?
+        .into_iter()
+        .find(|p| p.name == name)
+        .with_context(|| format!("ask: no persona {name}; `ljos personas` lists them"))?;
+    let runner = p.runner.as_deref().with_context(|| {
+        format!("ask: {name} has no runner; `ljos persona {name} --view ... --runner grok` gives it one")
+    })?;
+    let pane = persona_session::hand(name, runner, text)?;
+    Ok(format!("{name} has it in {pane}"))
 }
 
 /// Whether a panel's Jev answers may stand as its ballots: every seated
@@ -5571,16 +5622,12 @@ pub fn panel_jev(issue: &str, out: &Path) -> Result<String> {
             out.display()
         ));
         lines.extend(rows);
-        let thinkers = jev::thinkers("ballot");
-        for (i, (p, b)) in personas.iter().zip(&ballots).enumerate() {
+        for (p, b) in personas.iter().zip(&ballots) {
             let path = out.join(format!("{}.md", p.name));
             std::fs::write(&path, brief(&p.name, issue)?)?;
             lines.push(format!("  {}", path.display()));
-            if !thinkers.is_empty() {
-                let one = [thinkers[i % thinkers.len()].clone()];
-                for pane in dispatch_ballot(&p.name, issue, &one) {
-                    lines.push(format!("    thinker {} in {pane}", one[0].0));
-                }
+            if let Some(pane) = hand_ballot(p, issue) {
+                lines.push(format!("    {} votes in its own session in {pane}", p.name));
             }
             note_jev(
                 issue,
@@ -5886,38 +5933,6 @@ fn raw_segments(line: &str) -> Vec<String> {
 
 // ---- push gate -------------------------------------------------------------
 
-/// `~/.config/ljos/push.toml`, optional: whose remotes are the person's
-/// own, when the forge cannot be asked. Without it `gh` answers.
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
-pub struct PushPolicy {
-    /// Account or group names whose repositories are the person's.
-    #[serde(default)]
-    pub owners: Vec<String>,
-    /// `owner/repo` globs that are the person's but shared with others,
-    /// so a push to them needs a cited decision even before a release.
-    #[serde(default)]
-    pub shared: Vec<String>,
-}
-
-fn push_policy_path() -> PathBuf {
-    std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
-        .unwrap_or_else(|| PathBuf::from(".config"))
-        .join("ljos")
-        .join("push.toml")
-}
-
-/// The machine's push policy; without the file the forge is asked.
-#[must_use]
-pub fn push_policy() -> PushPolicy {
-    std::fs::read_to_string(push_policy_path())
-        .ok()
-        .and_then(|t| toml::from_str(&t).ok())
-        .unwrap_or_default()
-}
-
 /// A `git push` found in a shell line: where it runs, its arguments after
 /// `push`, and the `LJOS_CITE` it carries.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -6064,23 +6079,65 @@ fn gh_login() -> Option<String> {
         .filter(|l| !l.is_empty())
 }
 
-/// What `gh` says of a GitHub repository: the person's access and
-/// whether it has releases. Kept a day in the runtime directory, since a
-/// hook has seconds and these change rarely.
-fn gh_facts(owner: &str, repo: &str) -> Option<(Access, bool)> {
-    let cache = runtime_dir().join(format!("push-facts-{owner}-{repo}"));
-    let fresh = std::fs::metadata(&cache)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.elapsed().ok())
-        .is_some_and(|age| age < std::time::Duration::from_secs(86_400));
-    if fresh {
-        if let Some(v) = std::fs::read_to_string(&cache)
-            .ok()
-            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-        {
-            return Some((access_of(&v), v["released"].as_bool().unwrap_or(true)));
+/// The entity a repository's facts carry in the pack.
+#[must_use]
+pub fn repo_entity(owner: &str, repo: &str) -> String {
+    format!("repo:{}/{}", owner.to_lowercase(), repo.to_lowercase())
+}
+
+/// The latest facts the pack holds about a repository, from the atoms.
+#[must_use]
+pub fn repo_facts_in(atoms: &[Value], owner: &str, repo: &str) -> Option<Value> {
+    let entity = repo_entity(owner, repo);
+    atoms
+        .iter()
+        .filter(|a| a["facts"].is_object())
+        .filter(|a| {
+            a["entities"]
+                .as_array()
+                .is_some_and(|e| e.iter().any(|x| x.as_str() == Some(entity.as_str())))
+        })
+        .max_by(|a, b| {
+            a["ts"]
+                .as_str()
+                .unwrap_or("")
+                .cmp(b["ts"].as_str().unwrap_or(""))
+        })
+        .map(|a| a["facts"].clone())
+}
+
+/// The sentence a repository's facts are remembered as.
+#[must_use]
+pub fn repo_fact_text(owner: &str, repo: &str, facts: &Value) -> String {
+    let whose = if facts["mine"].as_bool().unwrap_or(false) {
+        "the person's own account"
+    } else {
+        "an organisation's or another account's"
+    };
+    let pushes = match access_of(facts) {
+        Access::Foreign => "the person cannot push to it, so a push there is theirs to run",
+        Access::Shared => "others push there too, so a push cites the decision behind it",
+        Access::Exclusive if facts["released"].as_bool().unwrap_or(true) => {
+            "it has releases, so a push cites the decision behind it"
         }
+        _ => "nobody else pushes there and it has no release, so a branch push runs",
+    };
+    format!("{owner}/{repo} is {whose} repository; {pushes}.")
+}
+
+/// What the seat knows of a GitHub repository: the pack's claim about it,
+/// or, the first time, what `gh` says, remembered as a standing claim
+/// with the repository's entity, so the hook raises it and the review
+/// clock brings it back. A wrong claim is forgotten (`ljos forget ID`) and
+/// the next push asks again.
+fn gh_facts(owner: &str, repo: &str) -> Option<(Access, bool)> {
+    let client = pack().ok();
+    let atoms = client
+        .as_ref()
+        .and_then(|c| atoms_lean(c, &c.workspace()).ok())
+        .unwrap_or_default();
+    if let Some(v) = repo_facts_in(&atoms, owner, repo) {
+        return Some((access_of(&v), v["released"].as_bool().unwrap_or(true)));
     }
     let login = gh_login()?;
     let meta: Value = serde_json::from_str(
@@ -6115,12 +6172,19 @@ fn gh_facts(owner: &str, repo: &str) -> Option<(Access, bool)> {
         "alone": collaborators <= 1,
         "released": releases > 0,
     });
-    let _ = std::fs::create_dir_all(runtime_dir());
-    let _ = std::fs::write(&cache, v.to_string());
+    if let Some(c) = client {
+        let mut atom = atom_body("lesson", &repo_fact_text(owner, repo, &v), &c.workspace());
+        add_entities(
+            &mut atom,
+            [repo_entity(owner, repo), "horizon:standing".to_string()].into_iter(),
+        );
+        atom["facts"] = v.clone();
+        let _ = c.post_atom(&atom);
+    }
     Some((access_of(&v), releases > 0))
 }
 
-/// Access from the cached facts: push permission, the person's own
+/// Access from a repository's facts: push permission, the person's own
 /// account, and no collaborator but the person.
 fn access_of(v: &Value) -> Access {
     match (
@@ -6134,10 +6198,10 @@ fn access_of(v: &Value) -> Access {
     }
 }
 
-/// The facts for a remote URL: `push.toml` when it names owners, else
-/// `gh` for GitHub, else, on another forge whose API the seat cannot ask,
-/// the person's own namespace when it carries their GitHub name.
-fn push_facts(url: &str, tagged: bool, policy: &PushPolicy) -> PushFacts {
+/// The facts for a remote URL: the pack's, else `gh`'s for GitHub, else,
+/// on a forge whose API the seat cannot ask, the person's own namespace
+/// when it carries their GitHub name.
+fn push_facts(url: &str, tagged: bool) -> PushFacts {
     let slug = remote_slug(url);
     let Some((owner, repo)) = slug.clone() else {
         return PushFacts {
@@ -6146,21 +6210,6 @@ fn push_facts(url: &str, tagged: bool, policy: &PushPolicy) -> PushFacts {
             released: tagged,
         };
     };
-    if !policy.owners.is_empty() {
-        let text = format!("{owner}/{repo}");
-        let access = if !policy.owners.iter().any(|o| o.eq_ignore_ascii_case(&owner)) {
-            Access::Foreign
-        } else if policy.shared.iter().any(|g| glob_matches(g, &text)) {
-            Access::Shared
-        } else {
-            Access::Exclusive
-        };
-        return PushFacts {
-            slug,
-            access,
-            released: tagged,
-        };
-    }
     if url.contains("github.com") {
         let (access, released) = gh_facts(&owner, &repo).unwrap_or((Access::Unknown, true));
         return PushFacts {
@@ -6201,7 +6250,7 @@ fn git_out(dir: Option<&str>, args: &[&str]) -> Option<String> {
 /// names (else the branch's upstream remote, else `origin`) and whether
 /// any tag exists there.
 #[must_use]
-pub fn push_tier_at(p: &PushCall, cwd: Option<&str>, policy: &PushPolicy) -> PushTier {
+pub fn push_tier_at(p: &PushCall, cwd: Option<&str>) -> PushTier {
     let dir: Option<String> = match (&p.dir, cwd) {
         (Some(d), Some(c)) if !d.starts_with('/') && !d.starts_with('~') => {
             Some(format!("{c}/{d}"))
@@ -6222,7 +6271,7 @@ pub fn push_tier_at(p: &PushCall, cwd: Option<&str>, policy: &PushPolicy) -> Pus
         .unwrap_or_else(|| "origin".into());
     let url = git_out(dir, &["remote", "get-url", &remote]).unwrap_or(remote);
     let tagged = git_out(dir, &["tag", "--list"]).is_some_and(|t| t.lines().any(is_version_tag));
-    push_tier(&p.args, &push_facts(&url, tagged, policy))
+    push_tier(&p.args, &push_facts(&url, tagged))
 }
 
 /// Whether a tag names a release: a version, `v1.2` or `0.3.0`, not a
@@ -6285,7 +6334,7 @@ pub fn gate_push(rule: Option<&Rule>, line: &str, cwd: Option<&str>) -> Option<R
         verdict: "ask".into(),
         reason,
     };
-    match push_tier_at(&p, cwd, &push_policy()) {
+    match push_tier_at(&p, cwd) {
         PushTier::Free => None,
         PushTier::Cite(why) => match p.cite.as_deref().map(cite_stands) {
             Some(Ok(stood)) => {
@@ -6453,6 +6502,7 @@ pub fn learn_anchors(
                 .any(|(agent, choice)| *agent == p.name && choice != outcome)
         })
         .map(|p| Persona {
+            runner: None,
             anchor: (p.anchor + (1.0 - p.anchor) * (1.0 - beta)).min(1.0),
             ..p.clone()
         })
@@ -8477,31 +8527,6 @@ pub fn judge_due_page() -> Result<String> {
         "{held} of {} on the page graded by the judges; {total} were due. {summary}\n",
         shown.len()
     ));
-    let open: Vec<&str> = out
-        .lines()
-        .filter(|l| l.starts_with("unsure\t") || l.starts_with("unanswered\t"))
-        .collect();
-    if let Some((name, j)) = jev::thinkers("review")
-        .into_iter()
-        .next()
-        .filter(|_| !open.is_empty())
-    {
-        let task = format!(
-            "You are the thinker {name}, asked to review stored claims a fast judge could not \
-             settle. For each row below (state, probability, id, text), check the claim against \
-             what the pack holds (`ljos search \"...\"`) and the code or notes it names. Grade it \
-             `ljos graded ID` when it still stands, `ljos graded ID --lapsed` when it no longer \
-             does, and for one a newer claim replaces, `ljos remember \"...\"` the correction. \
-             Change no files and push nothing.\n\n{}\n",
-            open.join("\n")
-        );
-        if let Some(pane) = jev::dispatch(&name, &j, &task) {
-            out.push_str(&format!(
-                "{} left open went to the thinker {name} in {pane}\n",
-                open.len()
-            ));
-        }
-    }
     Ok(out)
 }
 
@@ -12604,6 +12629,7 @@ mod tests {
     #[test]
     fn a_panel_seats_the_personas_that_speak_to_the_issue() {
         let mk = |name: &str, about: &[&str]| Persona {
+            runner: None,
             name: name.into(),
             anchor: 0.5,
             view: String::new(),
@@ -13716,6 +13742,7 @@ mod tests {
     #[test]
     fn personas_are_latest_per_name_and_anchor_the_settle() {
         let p = Persona {
+            runner: None,
             name: "reviewer".into(),
             anchor: 0.2,
             view: "Reads for what could break in production.".into(),
@@ -13746,6 +13773,7 @@ mod tests {
         assert!(learn_anchors(&got, &ballots, "hold", 0.5).is_empty());
         assert!(persona_atom(
             &Persona {
+                runner: None,
                 anchor: 1.5,
                 ..p.clone()
             },
@@ -13857,6 +13885,7 @@ mod tests {
             .to_string();
         assert!(err.contains("no playbook bound"), "{err}");
         let p = Persona {
+            runner: None,
             name: "reviewer".into(),
             anchor: 0.2,
             view: "Reads for what could break.".into(),
@@ -14236,6 +14265,7 @@ mod tests {
     #[test]
     fn a_generic_domain_gives_way_to_a_specific_one() {
         let persona = |name: &str, about: &[&str]| Persona {
+            runner: None,
             name: name.into(),
             anchor: 0.5,
             view: String::new(),
@@ -14824,6 +14854,8 @@ mod tests {
             plugin_template: None,
             probe: Vec::new(),
             clients: Vec::new(),
+            start: Vec::new(),
+            resume: Vec::new(),
         };
         assert_eq!(is_registered(&h, Path::new("/bin/ljos-mcp")), Some(true));
         let _ = std::fs::remove_dir_all(&dir);
@@ -14841,12 +14873,14 @@ mod tests {
         assert!(format_personas(&[]).starts_with("no personas;"));
         let roster = format_personas(&[
             Persona {
+                runner: None,
                 name: "reviewer".into(),
                 anchor: 0.2,
                 view: "Reads for what breaks.".into(),
                 entities: vec!["docs".into(), "release".into()],
             },
             Persona {
+                runner: None,
                 name: "reader".into(),
                 anchor: 0.8,
                 view: "Reads as a first-time user.".into(),
@@ -14874,13 +14908,28 @@ mod tests {
     }
 
     #[test]
-    fn a_thinker_votes_through_the_seat_under_its_own_name() {
-        let task = thinker_ballot_task("BRIEF", "buildengineer", "grok", "surf-ab12");
+    fn a_persona_votes_through_the_seat_under_its_own_name() {
+        let task = persona_ballot_task("BRIEF", "buildengineer", "surf-ab12");
         assert!(task.starts_with("BRIEF"));
-        assert!(task
-            .contains("ljos vote surf-ab12 --for OPTION --expect OPTION --as buildengineer-grok"));
-        assert!(task.contains("vissue note surf-ab12"));
+        assert!(
+            task.contains("ljos vote surf-ab12 --for OPTION --expect OPTION --as buildengineer ")
+        );
+        assert!(task.contains("ljos remember"));
         assert!(task.contains("Do not open a sitting"));
+        let p = Persona {
+            name: "buildengineer".into(),
+            anchor: 0.25,
+            view: "Reads pipelines.".into(),
+            entities: vec!["jenkins".into()],
+            runner: Some("grok".into()),
+        };
+        let atom = persona_atom(&p, "seat").unwrap();
+        assert_eq!(atom["runner"], "grok");
+        let mut back = personas_of(&[serde_json::json!({
+            "kind": "persona", "name": "buildengineer", "anchor": 0.25,
+            "text": "Reads pipelines.", "runner": "grok", "ts": "2026-10-02T00:00:00Z"
+        })]);
+        assert_eq!(back.pop().unwrap().runner.as_deref(), Some("grok"));
     }
 
     #[test]
@@ -14947,22 +14996,20 @@ mod tests {
             access_of(&serde_json::json!({"push": false})),
             Access::Foreign
         );
-        let policy = PushPolicy {
-            owners: vec!["haozeke".into()],
-            shared: vec!["HaoZeke/team-*".into()],
-        };
-        assert_eq!(
-            push_facts("git@github.com:HaoZeke/notes.git", false, &policy).access,
-            Access::Exclusive
-        );
-        assert_eq!(
-            push_facts("git@github.com:HaoZeke/team-site.git", false, &policy).access,
-            Access::Shared
-        );
-        assert_eq!(
-            push_facts("git@github.com:QMCPACK/qmcpack.git", false, &policy).access,
-            Access::Foreign
-        );
+        let fact = serde_json::json!({
+            "kind": "lesson", "ts": "2026-10-02T00:00:00Z",
+            "entities": [repo_entity("HaoZeke", "Notes"), "horizon:standing"],
+            "facts": {"push": true, "mine": true, "alone": true, "released": false}
+        });
+        let older = serde_json::json!({
+            "kind": "lesson", "ts": "2026-09-01T00:00:00Z",
+            "entities": ["repo:haozeke/notes"],
+            "facts": {"push": false}
+        });
+        let v = repo_facts_in(&[older, fact.clone()], "haozeke", "notes").unwrap();
+        assert_eq!(access_of(&v), Access::Exclusive, "the latest claim answers");
+        assert!(repo_facts_in(&[fact], "haozeke", "other").is_none());
+        assert!(repo_fact_text("HaoZeke", "notes", &v).contains("a branch push runs"));
         let deny = Rule {
             pattern: "x".into(),
             verdict: "deny".into(),

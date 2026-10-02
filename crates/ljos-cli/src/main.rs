@@ -204,6 +204,16 @@ enum Cmd {
         /// Domains it speaks to; a trust row scoped to one of them applies when the issue is about it.
         #[arg(long, value_delimiter = ',')]
         about: Vec<String>,
+        /// The runner that thinks as this persona in a session it keeps:
+        /// a runner named in harnesses.toml.
+        #[arg(long)]
+        runner: Option<String>,
+    },
+    /// Hand a persona a question or a task in its own session, opening its pane when it is closed.
+    Ask {
+        name: String,
+        /// What to ask, in words.
+        text: Vec<String>,
     },
     /// The personas the pack holds: name, anchor, domains and view, one per line.
     Personas,
@@ -656,16 +666,15 @@ fn main() -> Result<()> {
                             "{name}: Jev leaned {} at confidence {:.2}, under the {:.2} cut; not cast.",
                             b.choice, b.confidence, b.escalate_below
                         );
-                        let thinkers = ljos_cli::jev::thinkers("ballot");
-                        let panes = ljos_cli::dispatch_ballot(name, &issue, &thinkers);
-                        if panes.is_empty() {
-                            println!("Start a subagent from `ljos brief {name} {issue}`");
-                        } else {
-                            for pane in &panes {
-                                println!(
-                                    "  a thinker votes in {pane}; then `ljos consensus {issue}`"
-                                );
-                            }
+                        let persona = ljos_cli::personas_from_pack()
+                            .unwrap_or_default()
+                            .into_iter()
+                            .find(|p| p.name == name);
+                        match persona.as_ref().and_then(|p| ljos_cli::hand_ballot(p, &issue)) {
+                            Some(pane) => println!(
+                                "  {name} reasons in its own session in {pane}; then `ljos consensus {issue}`"
+                            ),
+                            None => println!("Start a subagent from `ljos brief {name} {issue}`"),
                         }
                         print!(
                             "{}",
@@ -722,14 +731,19 @@ fn main() -> Result<()> {
             anchor,
             view,
             about,
+            runner,
         } => {
             let body = write_persona(&Persona {
                 name,
                 anchor,
                 view,
                 entities: about,
+                runner,
             })?;
             println!("{}", format_write_ack(&body));
+        }
+        Cmd::Ask { name, text } => {
+            println!("{}", ljos_cli::ask_persona(&name, &text.join(" "))?);
         }
         Cmd::Personas => {
             print!("{}", format_personas(&personas_from_pack()?));

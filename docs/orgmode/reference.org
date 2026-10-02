@@ -22,8 +22,9 @@
 | =habit [NAME [VALUE]] [--unit U] [--every 7d] [--source S]= | pack | with a value, take a reading: the earlier reading closes and is kept as what it was, the next is due one cadence on; without, list the habits as they stand with the change since the last reading |
 | =graded ID [--lapsed]= | pack | one review graded |
 | =trust FROM TO WEIGHT [--why DEED]... [--about DOMAIN]...= | pack | one trust row; scoped when =--about= is given |
-| =persona NAME --anchor A --view TEXT [--about DOMAIN]...= | pack | a voter with a view; =A= in [0, 1] is how far it moves off its ballot; writes one unscoped inbound trust row |
+| =persona NAME --anchor A --view TEXT [--about DOMAIN]... [--runner RUNNER]= | pack | a voter with a view; =A= in [0, 1] is how far it moves off its ballot; writes one unscoped inbound trust row; =--runner= names a =[[harness]]= that reasons as the persona in a session it keeps |
 | =personas= | pack | the roster: name, anchor, domains, view, one per line |
+| =ask NAME TEXT= | persona session | hands the persona a question or a task in its own pane, opening it (and resuming its session) when it is closed |
 | =playbook ISSUE NAME= | pack | bind a recipe to the issue and copy its full body; the name is a tracker =playbook:= note until finish or release |
 | =playbooks= | pack | the closed set sit, arena, land, company-panel, overnight; pack latest per name, shipped seed when missing |
 | =brief NAME ISSUE= | pack, tracker | what a subagent playing the persona starts from: view, the bound playbook's full recipe, five named principles, the arena rubric, what the seat knows on its domains, the working set |
@@ -87,6 +88,13 @@ when to call it.
 
 =~/.config/ljos/env= is loaded for the keys above that the shell leaves unset.
 
+A runner's table may also name =start= and =resume=, the argv that open
+a session in a persona's home and resume the latest one there; a
+persona whose =--runner= is that table's name reasons in that session
+(=ljos ask=, =vote --jev=). =hooks_named= names the key a hooks file of
+named hooks takes the seat's hooks under, each command told its event
+with =ljos hook --event=.
+
 A runner's table in =harnesses.toml= may name =hooks=, a JSON settings
 file of the shape ={"hooks": {"<Event>": [{"matcher": "...", "hooks":
 [{"type": "command", "command": "..."}]}]}}=. =onboard= merges
@@ -115,11 +123,13 @@ stdin is an argv line and answered in plain lines.
 An asked =git push= (a seat rule =git push*= with verdict =ask=) is gated
 by where it goes; a deny stays a deny. The forge says whose the remote
 is: for GitHub, =gh api= reports the person's push permission, whether
-the owner is their own account, the collaborators and the releases, kept
-a day in the runtime directory. On a forge the seat cannot ask, a
+the owner is their own account, the collaborators and the releases. On a forge the seat cannot ask, a
 personal namespace that carries the person's GitHub name counts as
-theirs. =~/.config/ljos/push.toml= (=owners=, =shared=) answers instead
-when it names owners.
+theirs. What =gh= says is remembered in the pack as a standing claim on
+the entity =repo:OWNER/REPO=, so the next push reads the pack and not
+the forge, the hook raises the claim when a command names the
+repository, and the review clock brings it back. A wrong claim is
+forgotten with =ljos forget ID=, and the next push asks the forge again.
 
 | Push | Needs |
 |---+---|
@@ -160,12 +170,8 @@ names.
 | =cue_at= | 0.5 | probability at which the prompt counts as a correction or a choice |
 | =escalate_below= | 0.8 | a persona ballot under this confidence goes to a subagent |
 | =cache_days= | 7 | days an identical request is answered from the cache; 0 turns it off |
-| =command_mode= | =request= | how the =command= backend is spoken to: =request= (JSON on stdin, answers on stdout) or =prompt= (the questions as the last argument, the first JSON object printed is the answer), for a harness's one-shot mode |
 | =key_env= | unset | environment variable holding the key |
-| =surface= | =auto= | where a =prompt=-mode judge runs: =auto= (herdr, else tmux, else the judge abstains), =herdr=, =tmux= (session =ljos-judges=), or =none= (an unseen child, for adapters and tests); the pane stays open after the answer |
-| =[judges.NAME]= | none | a further judge: =backend=, =command=, =command_mode=, =surface=, =key_file=, =key_cmd=, =key_env=, =model=, =endpoint=, =budget_ms=, =usd_per_mtok_in=, and =weight= (1.0) in a pool |
-| =[escalate]= | none | the thinkers each decision goes on to when the route's pool is unsure, as lists of judge names |
-| =escalate_band= | =[0.2, 0.8]= | the probabilities, ends included, at which a pool counts as unsure |
+| =[judges.NAME]= | none | a further judge: =backend=, =command=, =key_file=, =key_cmd=, =key_env=, =model=, =endpoint=, =budget_ms=, =usd_per_mtok_in=, and =weight= (1.0) in a pool |
 | =[route]= | every decision to =default= | which judges answer each decision: =prompt=, =ballot=, =audit=, =review=, each a list of judge names; =default= is the judge the top-level keys describe |
 
 | Path | Holds |

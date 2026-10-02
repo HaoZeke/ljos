@@ -260,6 +260,10 @@ pub struct PersonaArgs {
     /// issue is about it.
     #[serde(default)]
     pub about: Vec<String>,
+    /// The runner that thinks as this persona in a session it keeps:
+    /// a runner named in harnesses.toml.
+    #[serde(default)]
+    pub runner: Option<String>,
 }
 
 /// A writer's answer as the object a structured result has to be: the
@@ -1395,6 +1399,7 @@ impl LjosServer {
             anchor: args.anchor.unwrap_or(0.5),
             view: args.view,
             entities: args.about,
+            runner: args.runner,
         };
         write_persona(&persona).map(object).map_err(refused)
     }
