@@ -14773,6 +14773,7 @@ mod tests {
     /// nothing; an unnamed runner is refused with the names the file holds.
     #[test]
     fn onboarding_a_config_file_runner_writes_once() {
+        let _g = env_guard();
         let all: super::Harnesses = toml::from_str(super::HARNESSES_EXAMPLE).expect("parses");
         // Three shapes, then the seven runners this seat has carried.
         assert_eq!(all.harness.len(), 10);
@@ -15502,6 +15503,7 @@ mod tests {
 
     #[test]
     fn consent_is_refused_under_a_runner() {
+        let _g = env_guard();
         // Safety: the variable is this test's own and is removed after.
         unsafe { std::env::set_var("ACMEAGENT_CONVERSATION_ID", "0199a1b2-c3d4-e5f6") };
         assert!(under_a_runner());
