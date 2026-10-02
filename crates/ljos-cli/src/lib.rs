@@ -3537,7 +3537,12 @@ fn due_nudge(call: &HookCall) -> (String, Option<String>) {
     let Ok(atoms) = atoms_lean(&client, &client.workspace()) else {
         return (String::new(), None);
     };
-    let due = due_of(&atoms, &now_utc()).len();
+    let now = now_utc();
+    let week = utc_at(epoch_s().saturating_sub(DUE_WINDOW_DAYS * 86_400));
+    let all = due_of(&atoms, &now);
+    let due = came_due_since(&all, &week);
+    // A backlog only grows, so its size is no task: the nudge counts what
+    // came due inside the window, and a seat with nothing new says nothing.
     // A quiet seat has nothing to show, so it is counted once here. A seat
     // with claims due names the key and the caller marks it when the note
     // is delivered. Do not call consolidate here: that walk is a sitting,
@@ -3548,13 +3553,35 @@ fn due_nudge(call: &HookCall) -> (String, Option<String>) {
     }
     (
         format!(
-            "{due} claim{} due for review in this seat. Review is not the task: when the work \
-             reaches a pause, `ljos due` shows the soonest {SITTING_DUE}; grade one only after checking it \
-             against what you know (`ljos graded ID`, `--lapsed` when it no longer holds) and leave the rest due.",
-            if due == 1 { " is" } else { "s are" }
+            "{due} claim{} came due for review this week ({} due in all). Review is not the task: \
+             when the work reaches a pause, `ljos due` shows the soonest {SITTING_DUE}; grade one only \
+             after checking it against what you know (`ljos graded ID`, `--lapsed` when it no longer \
+             holds) and leave the rest due.",
+            if due == 1 { "" } else { "s" },
+            all.len()
         ),
         Some(key),
     )
+}
+
+/// How far back the prompt's due line looks.
+pub const DUE_WINDOW_DAYS: u64 = 7;
+
+/// The due claims that came due at or after `since` (RFC 3339): a review
+/// date inside the window, or, for a claim never reviewed, a write inside
+/// it. The rest is backlog the nudge does not count.
+#[must_use]
+pub fn came_due_since(due: &[Value], since: &str) -> usize {
+    due.iter()
+        .filter(|a| {
+            let when = a["due_at"]
+                .as_str()
+                .filter(|d| !d.is_empty())
+                .or_else(|| a["ts"].as_str())
+                .unwrap_or("");
+            when >= since
+        })
+        .count()
 }
 
 /// The answer a [`HookShape::Steps`] runner reads: always one JSON object.
@@ -9254,6 +9281,12 @@ pub fn now_utc() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
+    utc_at(secs)
+}
+
+/// `secs` after the epoch, RFC 3339 UTC to the second, as the pack writes.
+#[must_use]
+pub fn utc_at(secs: u64) -> String {
     let days = secs / 86_400;
     let rem = secs % 86_400;
     // Civil date from days since the epoch (Howard Hinnant's algorithm).
@@ -15376,6 +15409,20 @@ mod tests {
             seat_guard(&doc.cue).is_none(),
             "a doc naming the path is not the path"
         );
+    }
+
+    #[test]
+    fn the_due_line_counts_what_came_due_this_week() {
+        let due = vec![
+            serde_json::json!({"id": "a", "due_at": "2026-09-30T00:00:00.000Z"}),
+            serde_json::json!({"id": "b", "due_at": "2026-08-01T00:00:00.000Z"}),
+            serde_json::json!({"id": "c", "ts": "2026-10-01T00:00:00.000Z"}),
+            serde_json::json!({"id": "d", "ts": "2026-07-01T00:00:00.000Z"}),
+        ];
+        assert_eq!(came_due_since(&due, "2026-09-25T00:00:00.000Z"), 2);
+        assert_eq!(came_due_since(&due, "2026-10-02T00:00:00.000Z"), 0);
+        assert_eq!(utc_at(0), "1970-01-01T00:00:00.000Z");
+        assert_eq!(utc_at(86_400 * 365), "1971-01-01T00:00:00.000Z");
     }
 
     #[test]

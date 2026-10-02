@@ -4,6 +4,10 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
+- The prompt's due line counts what came due this week, with the
+  backlog's size beside it, and says nothing when nothing new came due.
+  A seat with 1263 due claims had been told so every session; the
+  count only grew, and a runner had once tried to drain it unread.
 - Claude Code's tool gate covers its file tools: the `PreToolUse`
   matcher is `Bash|Edit|Write|MultiEdit|NotebookEdit`, and a file
   tool's cue is the tool and the path it writes, not the file's text, so
