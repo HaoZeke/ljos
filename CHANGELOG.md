@@ -11,13 +11,6 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
   the old ones kept as `NAME.bak-pre-VERSION`. The seat's guard keeps
   agents from writing its binaries; this verb moves them forward with
   bytes no agent made.
-- `ljos upgrade [VERSION]` installs a published release beside the
-  running `ljos`: the archive the release workflow built for the tag,
-  checked against its published sha256, each binary an executable that
-  names the version, every binary checked before any is replaced, and
-  the old ones kept as `NAME.bak-pre-VERSION`. The seat's guard keeps
-  agents from writing its binaries; this verb moves them forward with
-  bytes no agent made.
 - A here-document's body is data, not commands: a seat rule no longer
   meets `cargo build` inside `cat > job.sbatch <<'EOF' ... EOF`, which
   refused every job script written that way on a desktop seat. Commands

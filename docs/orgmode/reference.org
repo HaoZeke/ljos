@@ -26,7 +26,6 @@
 | =personas= | pack | the roster: name, anchor, domains, view, one per line |
 | =ask NAME TEXT= | persona session | hands the persona a question or a task in its own pane, opening it (and resuming its session) when it is closed |
 | =upgrade [VERSION] [--dir DIR]= | release | installs a published release beside the running =ljos=: the archive the release workflow built for the tag, checked against the sha256 published beside it, each binary an executable that names the version; the old ones kept as =NAME.bak-pre-VERSION=. The only way an agent moves the seat's binaries, which the guard keeps it from writing |
-| =upgrade [VERSION] [--dir DIR]= | release | installs a published release beside the running =ljos=: the archive the release workflow built for the tag, checked against the sha256 published beside it, each binary an executable that names the version; the old ones kept as =NAME.bak-pre-VERSION=. The only way an agent moves the seat's binaries, which the guard keeps it from writing |
 | =playbook ISSUE NAME= | pack | bind a recipe to the issue and copy its full body; the name is a tracker =playbook:= note until finish or release |
 | =playbooks= | pack | the closed set sit, arena, land, company-panel, overnight; pack latest per name, shipped seed when missing |
 | =brief NAME ISSUE= | pack, tracker | what a subagent playing the persona starts from: view, the bound playbook's full recipe, five named principles, the arena rubric, what the seat knows on its domains, the working set |

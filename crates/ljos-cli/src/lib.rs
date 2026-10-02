@@ -16,7 +16,6 @@ pub mod jev;
 pub mod persona_session;
 pub mod sync;
 pub mod upgrade;
-pub mod upgrade;
 
 /// Working-core files this seat will print. Nothing else, and never write.
 pub const CARD_NAMES: &[&str] = &["USER.md", "MEMORY.md"];

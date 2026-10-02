@@ -217,14 +217,6 @@ enum Cmd {
         #[arg(long)]
         dir: Option<PathBuf>,
     },
-    /// Install a published release's binaries beside this ljos: fetched from the release, checked against its sha256 and its version, the old ones kept.
-    Upgrade {
-        /// The release version; the newest when absent.
-        version: Option<String>,
-        /// Install here instead of beside the running ljos.
-        #[arg(long)]
-        dir: Option<PathBuf>,
-    },
     /// Hand a persona a question or a task in its own session, opening its pane when it is closed.
     Ask {
         name: String,
@@ -762,12 +754,6 @@ fn main() -> Result<()> {
                 runner,
             })?;
             println!("{}", format_write_ack(&body));
-        }
-        Cmd::Upgrade { version, dir } => {
-            print!(
-                "{}",
-                ljos_cli::upgrade::upgrade(version.as_deref(), dir.as_deref())?
-            );
         }
         Cmd::Upgrade { version, dir } => {
             print!(
