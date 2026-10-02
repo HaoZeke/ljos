@@ -13870,6 +13870,7 @@ mod tests {
     /// the answer is the runner's shape only when there is something to say.
     #[test]
     fn hook_calls_are_read_and_answered_in_the_runners_shape() {
+        let _g = env_guard();
         let tool = hook_call(
             r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"cargo test","description":"run"}}"#,
         );
@@ -14031,6 +14032,7 @@ mod tests {
     /// carries the verdict as the runner's permission decision.
     #[test]
     fn rules_match_the_line_and_the_hook_carries_the_verdict() {
+        let _g = env_guard();
         assert!(glob_matches("rm -rf *", "rm -rf /tmp/x"));
         assert!(!glob_matches("rm -rf *", "ls -la"));
         assert!(glob_matches("*sudo*", "echo hi && sudo reboot"));
