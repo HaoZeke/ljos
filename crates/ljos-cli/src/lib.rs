@@ -5838,7 +5838,8 @@ fn raw_segments(line: &str) -> Vec<String> {
 
 // ---- push gate -------------------------------------------------------------
 
-/// `~/.config/ljos/push.toml`: whose remotes are the person's own.
+/// `~/.config/ljos/push.toml`, optional: whose remotes are the person's
+/// own, when the forge cannot be asked. Without it `gh` answers.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
 pub struct PushPolicy {
     /// Account or group names whose repositories are the person's.
@@ -5860,7 +5861,7 @@ fn push_policy_path() -> PathBuf {
         .join("push.toml")
 }
 
-/// The machine's push policy; none names no owner, so no push is free.
+/// The machine's push policy; without the file the forge is asked.
 #[must_use]
 pub fn push_policy() -> PushPolicy {
     std::fs::read_to_string(push_policy_path())
@@ -5952,16 +5953,33 @@ pub enum PushTier {
     Person(String),
 }
 
-/// What the gate makes of a push, from its arguments, the remote's
-/// `owner/repo`, whether that repository carries release tags, and the
-/// policy. Pure, so the ladder is tested without a repository.
+/// Whose a remote is, as far as the seat can tell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Access {
+    /// The person's own, and nobody else pushes there.
+    Exclusive,
+    /// The person can push, and so can others: an organisation's, or one
+    /// with other collaborators.
+    Shared,
+    /// The person cannot push there.
+    Foreign,
+    /// Nothing answered.
+    Unknown,
+}
+
+/// What the gate knows about the remote a push goes to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PushFacts {
+    pub slug: Option<(String, String)>,
+    pub access: Access,
+    /// Releases on the forge, or tags in the clone.
+    pub released: bool,
+}
+
+/// What the gate makes of a push, from its arguments and the facts about
+/// its remote. Pure, so the ladder is tested without a repository.
 #[must_use]
-pub fn push_tier(
-    args: &[String],
-    slug: Option<&(String, String)>,
-    released: bool,
-    policy: &PushPolicy,
-) -> PushTier {
+pub fn push_tier(args: &[String], facts: &PushFacts) -> PushTier {
     let forced = args
         .iter()
         .any(|a| a == "-f" || a.starts_with("--force") || (a.starts_with('+') && a.len() > 1));
@@ -5977,22 +5995,142 @@ pub fn push_tier(
     if tags {
         return PushTier::Person("tags and mirrors publish releases".into());
     }
-    let Some((owner, repo)) = slug else {
+    let Some((owner, repo)) = &facts.slug else {
         return PushTier::Person("the remote's owner could not be read".into());
     };
-    if !policy.owners.iter().any(|o| o.eq_ignore_ascii_case(owner)) {
-        return PushTier::Person(format!(
-            "{owner}/{repo} is not under an owner in ~/.config/ljos/push.toml"
-        ));
+    let slug = format!("{owner}/{repo}");
+    match facts.access {
+        Access::Foreign => PushTier::Person(format!("{slug} is not the person's to push to")),
+        Access::Unknown => PushTier::Person(format!("nothing said whose {slug} is")),
+        Access::Shared => PushTier::Cite(format!("{slug} is shared")),
+        Access::Exclusive if facts.released => PushTier::Cite(format!("{slug} has releases")),
+        Access::Exclusive => PushTier::Free,
     }
-    let slug_text = format!("{owner}/{repo}");
-    if policy.shared.iter().any(|g| glob_matches(g, &slug_text)) {
-        return PushTier::Cite(format!("{slug_text} is shared"));
+}
+
+/// The forge's account name for the person, from `gh`.
+fn gh_login() -> Option<String> {
+    run_captured("gh", &["api", "user", "--jq", ".login"])
+        .ok()
+        .map(|o| o.stdout.trim().to_string())
+        .filter(|l| !l.is_empty())
+}
+
+/// What `gh` says of a GitHub repository: the person's access and
+/// whether it has releases. Kept a day in the runtime directory, since a
+/// hook has seconds and these change rarely.
+fn gh_facts(owner: &str, repo: &str) -> Option<(Access, bool)> {
+    let cache = runtime_dir().join(format!("push-facts-{owner}-{repo}"));
+    let fresh = std::fs::metadata(&cache)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .is_some_and(|age| age < std::time::Duration::from_secs(86_400));
+    if fresh {
+        if let Some(v) = std::fs::read_to_string(&cache)
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        {
+            return Some((access_of(&v), v["released"].as_bool().unwrap_or(true)));
+        }
     }
-    if released {
-        return PushTier::Cite(format!("{slug_text} has releases"));
+    let login = gh_login()?;
+    let meta: Value = serde_json::from_str(
+        &run_captured(
+            "gh",
+            &[
+                "api",
+                &format!("repos/{owner}/{repo}"),
+                "--jq",
+                "{type: .owner.type, owner: .owner.login, push: .permissions.push}",
+            ],
+        )
+        .ok()?
+        .stdout,
+    )
+    .ok()?;
+    let count = |path: String| -> Option<u64> {
+        run_captured("gh", &["api", &path, "--jq", "length"])
+            .ok()?
+            .stdout
+            .trim()
+            .parse()
+            .ok()
+    };
+    let collaborators =
+        count(format!("repos/{owner}/{repo}/collaborators?per_page=2")).unwrap_or(2);
+    let releases = count(format!("repos/{owner}/{repo}/releases?per_page=1")).unwrap_or(1);
+    let v = serde_json::json!({
+        "push": meta["push"].as_bool().unwrap_or(false),
+        "mine": meta["type"].as_str() == Some("User")
+            && meta["owner"].as_str().is_some_and(|o| o.eq_ignore_ascii_case(&login)),
+        "alone": collaborators <= 1,
+        "released": releases > 0,
+    });
+    let _ = std::fs::create_dir_all(runtime_dir());
+    let _ = std::fs::write(&cache, v.to_string());
+    Some((access_of(&v), releases > 0))
+}
+
+/// Access from the cached facts: push permission, the person's own
+/// account, and no collaborator but the person.
+fn access_of(v: &Value) -> Access {
+    match (
+        v["push"].as_bool().unwrap_or(false),
+        v["mine"].as_bool().unwrap_or(false),
+        v["alone"].as_bool().unwrap_or(false),
+    ) {
+        (false, _, _) => Access::Foreign,
+        (true, true, true) => Access::Exclusive,
+        (true, _, _) => Access::Shared,
     }
-    PushTier::Free
+}
+
+/// The facts for a remote URL: `push.toml` when it names owners, else
+/// `gh` for GitHub, else, on another forge whose API the seat cannot ask,
+/// the person's own namespace when it carries their GitHub name.
+fn push_facts(url: &str, tagged: bool, policy: &PushPolicy) -> PushFacts {
+    let slug = remote_slug(url);
+    let Some((owner, repo)) = slug.clone() else {
+        return PushFacts {
+            slug,
+            access: Access::Unknown,
+            released: tagged,
+        };
+    };
+    if !policy.owners.is_empty() {
+        let text = format!("{owner}/{repo}");
+        let access = if !policy.owners.iter().any(|o| o.eq_ignore_ascii_case(&owner)) {
+            Access::Foreign
+        } else if policy.shared.iter().any(|g| glob_matches(g, &text)) {
+            Access::Shared
+        } else {
+            Access::Exclusive
+        };
+        return PushFacts {
+            slug,
+            access,
+            released: tagged,
+        };
+    }
+    if url.contains("github.com") {
+        let (access, released) = gh_facts(&owner, &repo).unwrap_or((Access::Unknown, true));
+        return PushFacts {
+            slug,
+            access,
+            released: released || tagged,
+        };
+    }
+    let access = match gh_login() {
+        Some(login) if login.eq_ignore_ascii_case(&owner) => Access::Exclusive,
+        Some(_) => Access::Foreign,
+        None => Access::Unknown,
+    };
+    PushFacts {
+        slug,
+        access,
+        released: tagged,
+    }
 }
 
 fn git_out(dir: Option<&str>, args: &[&str]) -> Option<String> {
@@ -6035,9 +6173,8 @@ pub fn push_tier_at(p: &PushCall, cwd: Option<&str>, policy: &PushPolicy) -> Pus
         })
         .unwrap_or_else(|| "origin".into());
     let url = git_out(dir, &["remote", "get-url", &remote]).unwrap_or(remote);
-    let slug = remote_slug(&url);
-    let released = git_out(dir, &["tag", "--list"]).is_some_and(|t| !t.is_empty());
-    push_tier(&p.args, slug.as_ref(), released, policy)
+    let tagged = git_out(dir, &["tag", "--list"]).is_some_and(|t| !t.is_empty());
+    push_tier(&p.args, &push_facts(&url, tagged, policy))
 }
 
 /// Whether a cite stands: a deed accession `deedar current` takes, or an
@@ -14659,44 +14796,66 @@ mod tests {
             remote_slug("https://gitlab.com/group/sub/proj"),
             Some(("sub".into(), "proj".into()))
         );
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let facts = |access: Access, released: bool| PushFacts {
+            slug: Some(("HaoZeke".into(), "notes".into())),
+            access,
+            released,
+        };
+        assert_eq!(
+            push_tier(&args(&["origin", "main"]), &facts(Access::Exclusive, false)),
+            PushTier::Free
+        );
+        assert!(matches!(
+            push_tier(&args(&[]), &facts(Access::Exclusive, true)),
+            PushTier::Cite(_)
+        ));
+        assert!(matches!(
+            push_tier(&args(&[]), &facts(Access::Shared, false)),
+            PushTier::Cite(_)
+        ));
+        assert!(matches!(
+            push_tier(&args(&[]), &facts(Access::Foreign, false)),
+            PushTier::Person(_)
+        ));
+        assert!(matches!(
+            push_tier(&args(&[]), &facts(Access::Unknown, false)),
+            PushTier::Person(_)
+        ));
+        assert!(matches!(
+            push_tier(&args(&["--tags"]), &facts(Access::Exclusive, false)),
+            PushTier::Person(_)
+        ));
+        assert!(matches!(
+            push_tier(
+                &args(&["origin", "+main"]),
+                &facts(Access::Exclusive, false)
+            ),
+            PushTier::Person(_)
+        ));
+        let alone = serde_json::json!({"push": true, "mine": true, "alone": true});
+        assert_eq!(access_of(&alone), Access::Exclusive);
+        let org = serde_json::json!({"push": true, "mine": false, "alone": true});
+        assert_eq!(access_of(&org), Access::Shared);
+        assert_eq!(
+            access_of(&serde_json::json!({"push": false})),
+            Access::Foreign
+        );
         let policy = PushPolicy {
             owners: vec!["haozeke".into()],
             shared: vec!["HaoZeke/team-*".into()],
         };
-        let mine = ("HaoZeke".to_string(), "notes".to_string());
-        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(
-            push_tier(&args(&["origin", "main"]), Some(&mine), false, &policy),
-            PushTier::Free
+            push_facts("git@github.com:HaoZeke/notes.git", false, &policy).access,
+            Access::Exclusive
         );
-        assert!(matches!(
-            push_tier(&args(&[]), Some(&mine), true, &policy),
-            PushTier::Cite(_)
-        ));
-        let team = ("HaoZeke".to_string(), "team-site".to_string());
-        assert!(matches!(
-            push_tier(&args(&[]), Some(&team), false, &policy),
-            PushTier::Cite(_)
-        ));
-        let theirs = ("QMCPACK".to_string(), "qmcpack".to_string());
-        assert!(matches!(
-            push_tier(&args(&[]), Some(&theirs), false, &policy),
-            PushTier::Person(_)
-        ));
-        assert!(matches!(
-            push_tier(&args(&["--tags"]), Some(&mine), false, &policy),
-            PushTier::Person(_)
-        ));
-        assert!(matches!(
-            push_tier(&args(&["origin", "+main"]), Some(&mine), false, &policy),
-            PushTier::Person(_)
-        ));
-        assert!(
-            matches!(
-                push_tier(&args(&[]), Some(&mine), false, &PushPolicy::default()),
-                PushTier::Person(_)
-            ),
-            "no policy, no free push"
+        assert_eq!(
+            push_facts("git@github.com:HaoZeke/team-site.git", false, &policy).access,
+            Access::Shared
+        );
+        assert_eq!(
+            push_facts("git@github.com:QMCPACK/qmcpack.git", false, &policy).access,
+            Access::Foreign
         );
         let deny = Rule {
             pattern: "x".into(),

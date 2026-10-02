@@ -2,6 +2,17 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
+## Unreleased
+
+- The push gate asks the forge whose a remote is, so no file is needed:
+  `gh api` gives the person's push permission, whether the owner is
+  their own account, the collaborators and the releases, kept a day. A
+  branch push to the person's own unshared, unreleased repository runs;
+  a shared, organisation or released one needs a cite; one they cannot
+  push to is theirs to run. On a forge the seat cannot ask, their own
+  namespace under their GitHub name counts as theirs. `push.toml`
+  remains an override.
+
 ## 0.19.0 (2026-10-02)
 
 - A thinker never runs unseen: a prompt-mode judge opens in a herdr
