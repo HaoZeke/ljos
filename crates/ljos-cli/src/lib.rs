@@ -6357,6 +6357,54 @@ pub fn cite_stands(cite: &str) -> std::result::Result<String, String> {
     ))
 }
 
+/// The seat verb a bare tracker verb stands in for: the tracker writes
+/// one store, the seat's verb writes every store and weighs the ballot.
+pub const SEAT_VERBS: &[(&str, &str)] = &[
+    ("claim", "sitting"),
+    ("vote", "vote"),
+    ("release", "release"),
+    ("consensus", "consensus"),
+];
+
+/// The exact seat command a denied `vissue VERB ARGS` line should have
+/// been, its arguments carried over: `vissue claim ljos-6c3z` is
+/// `ljos sitting ljos-6c3z`. `None` for a line with no such verb.
+#[must_use]
+pub fn seat_command_for(line: &str) -> Option<String> {
+    command_segments(line).into_iter().find_map(|seg| {
+        let mut words = seg.split_whitespace();
+        if words.next()? != "vissue" {
+            return None;
+        }
+        let verb = words.next()?;
+        let (_, seat) = SEAT_VERBS.iter().find(|(v, _)| *v == verb)?;
+        // `claim` takes an assignee the sitting reads from the runner.
+        let rest: Vec<&str> = if verb == "claim" {
+            words.take(1).collect()
+        } else {
+            words.collect()
+        };
+        Some(
+            format!("ljos {seat} {}", rest.join(" "))
+                .trim_end()
+                .to_string(),
+        )
+    })
+}
+
+/// A deny on a bare tracker verb names the exact seat command to run in
+/// its place, so the agent runs it instead of guessing at a placeholder.
+#[must_use]
+pub fn redirect_seat_verb(rule: Option<Rule>, line: &str) -> Option<Rule> {
+    let mut r = rule?;
+    if r.verdict == "deny" {
+        if let Some(cmd) = seat_command_for(line) {
+            r.reason = format!("{} Run `{cmd}` instead.", r.reason.trim_end());
+        }
+    }
+    Some(r)
+}
+
 /// The verdict the push gate makes of a line the rules asked about: `None`
 /// lets it run. Only an `ask` on a push is gated; every other verdict, and
 /// a line with no push, is the rule's own. A cited pass is noted on the
@@ -10835,7 +10883,10 @@ pub fn policy_with_memory(argv: &[String]) -> Result<String> {
     let cwd = std::env::current_dir()
         .ok()
         .map(|d| d.display().to_string());
-    let gated = gate_push(verdict_for(&rules, &line), &line, cwd.as_deref());
+    let gated = redirect_seat_verb(
+        gate_push(verdict_for(&rules, &line), &line, cwd.as_deref()),
+        &line,
+    );
     let ruled = hook_output_ruled(&call, &context, gated.as_ref());
     match tcb_check(argv) {
         Some(tcb) if !tcb.is_empty() => Ok(format!("{line}\n{tcb}\n{ruled}")),
@@ -15059,6 +15110,27 @@ mod tests {
             "a deny is the rule's own"
         );
         assert_eq!(gate_push(None, "git push", None), None);
+    }
+
+    #[test]
+    fn a_denied_tracker_verb_names_the_seat_command_to_run() {
+        assert_eq!(
+            seat_command_for("vissue claim ljos-6c3z").as_deref(),
+            Some("ljos sitting ljos-6c3z")
+        );
+        assert_eq!(
+            seat_command_for("cd notes && vissue vote surf-ab12 --for A").as_deref(),
+            Some("ljos vote surf-ab12 --for A")
+        );
+        assert_eq!(seat_command_for("vissue claims --by codex"), None);
+        assert_eq!(seat_command_for("ljos sitting x"), None);
+        let deny = Rule {
+            pattern: "vissue claim*".into(),
+            verdict: "deny".into(),
+            reason: "Use ljos sitting.".into(),
+        };
+        let r = redirect_seat_verb(Some(deny), "vissue claim ljos-6c3z").unwrap();
+        assert!(r.reason.ends_with("Run `ljos sitting ljos-6c3z` instead."));
     }
 
     #[test]

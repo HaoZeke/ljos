@@ -935,7 +935,10 @@ fn main() -> Result<()> {
             let gated = if tcb_rule.is_some() {
                 None
             } else {
-                ljos_cli::gate_push(verdict_for(&rules, &call.cue), &call.cue, cwd.as_deref())
+                ljos_cli::redirect_seat_verb(
+                    ljos_cli::gate_push(verdict_for(&rules, &call.cue), &call.cue, cwd.as_deref()),
+                    &call.cue,
+                )
             };
             let verdict = tcb_rule.as_ref().or(gated.as_ref());
             // Search on the prompt. A camel-case runner discards that

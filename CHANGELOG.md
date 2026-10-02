@@ -2,6 +2,14 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
+## Unreleased
+
+- A deny on a bare tracker verb names the exact seat command to run in
+  its place, arguments carried over: `vissue claim ljos-6c3z` is told
+  to run `ljos sitting ljos-6c3z`, `vissue vote X --for A` is told
+  `ljos vote X --for A`. The rule's reason had named a placeholder, and
+  an agent guessed.
+
 ## 0.21.0 (2026-10-02)
 
 - A seat rule's trailing `*` straight after a word continues only past
