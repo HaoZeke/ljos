@@ -427,7 +427,7 @@ pub fn config() -> Option<(Config, String)> {
         .iter()
         .any(|(d, _)| !judges_for(&cfg, d).is_empty());
     let key = usable("default", &cfg.default_judge()).unwrap_or_default();
-    any.then(|| (cfg, key))
+    any.then_some((cfg, key))
 }
 
 /// What Jev said about one prompt.
