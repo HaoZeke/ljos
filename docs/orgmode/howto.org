@@ -273,7 +273,16 @@ ballot = ["grok", "omp", "hermes"]
 #+end_src
 
 =agy -p --mode plan= and any other runner with a one-shot mode take the
-same shape. The question is the last argument, and the first
+same shape.
+
+A thinker never runs unseen. =surface= (=auto= by default) opens it in a
+herdr pane when herdr's server is up, else in a window of the tmux
+session =ljos-judges=. The pane names the judge, shows the runner
+reasoning, and keeps a shell open after the answer, so the person can
+read it back, attach, or stop the run. A stopped or closed pane leaves
+no answer, and that judge abstains. With no herdr and no tmux, the judge
+abstains as well. =surface = "none"= runs a child with no pane, for a
+request-mode adapter or a test. The question is the last argument, and the first
 JSON object the runner prints is its answer. A thinker runs with
 =LJOS_JUDGE=1=. Under that variable the seat's hook injects nothing into
 the thinker's own turn, and the argv law still judges its commands. A

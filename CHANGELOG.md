@@ -4,6 +4,12 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
+- A thinker never runs unseen: a prompt-mode judge opens in a herdr
+  pane, else a window of the tmux session `ljos-judges` (`surface =
+  "auto"`), names itself, tees what it prints back to the seat, and
+  leaves a shell in the pane for the person to read, attach or stop it.
+  No pane system, no answer. `surface = "none"` is for adapters and
+  tests.
 - Judges layer: when the route's pool is unsure, a probability inside
   `escalate_band` (0.2 to 0.8) or a choice under `escalate_below`, the
   decision goes on to the thinkers `[escalate]` names, runners such as

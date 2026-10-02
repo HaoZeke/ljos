@@ -162,7 +162,8 @@ else the branch's upstream, else =origin=, read in the directory a =cd= or
 | =cache_days= | 7 | days an identical request is answered from the cache; 0 turns it off |
 | =command_mode= | =request= | how the =command= backend is spoken to: =request= (JSON on stdin, answers on stdout) or =prompt= (the questions as the last argument, the first JSON object printed is the answer), for a harness's one-shot mode |
 | =key_env= | unset | environment variable holding the key |
-| =[judges.NAME]= | none | a further judge: =backend=, =command=, =command_mode=, =key_file=, =key_cmd=, =key_env=, =model=, =endpoint=, =budget_ms=, =usd_per_mtok_in=, and =weight= (1.0) in a pool |
+| =surface= | =auto= | where a =prompt=-mode judge runs: =auto= (herdr, else tmux, else the judge abstains), =herdr=, =tmux= (session =ljos-judges=), or =none= (an unseen child, for adapters and tests); the pane stays open after the answer |
+| =[judges.NAME]= | none | a further judge: =backend=, =command=, =command_mode=, =surface=, =key_file=, =key_cmd=, =key_env=, =model=, =endpoint=, =budget_ms=, =usd_per_mtok_in=, and =weight= (1.0) in a pool |
 | =[escalate]= | none | the thinkers each decision goes on to when the route's pool is unsure, as lists of judge names |
 | =escalate_band= | =[0.2, 0.8]= | the probabilities, ends included, at which a pool counts as unsure |
 | =[route]= | every decision to =default= | which judges answer each decision: =prompt=, =ballot=, =audit=, =review=, each a list of judge names; =default= is the judge the top-level keys describe |
