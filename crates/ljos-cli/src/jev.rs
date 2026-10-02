@@ -415,8 +415,8 @@ pub fn judges_for(cfg: &Config, decision: &str) -> Vec<(String, Judge, String)> 
 }
 
 /// The machine's setting, when it turned judging on, the month's spend is
-/// under its cap, and at least one judge for the prompt can be asked. The
-/// string is kept for callers that only test for a setting.
+/// under its cap, and at least one judge for some decision can be asked,
+/// with the default judge's key (empty when it has none).
 #[must_use]
 pub fn config() -> Option<(Config, String)> {
     let cfg = read_config()?;
@@ -426,7 +426,8 @@ pub fn config() -> Option<(Config, String)> {
     let any = DECISIONS
         .iter()
         .any(|(d, _)| !judges_for(&cfg, d).is_empty());
-    any.then(|| (cfg, String::new()))
+    let key = usable("default", &cfg.default_judge()).unwrap_or_default();
+    any.then(|| (cfg, key))
 }
 
 /// What Jev said about one prompt.
@@ -1645,8 +1646,9 @@ mod tests {
             "no judge answered it, so the pool leaves it out"
         );
         let leaning = pool(&body, &[(3.0, a), (1.0, b)]);
+        // (3 ln 9 - ln 9) / 4 = ln 3, so the pool is 3/4.
         assert!(
-            leaning["q"]["noul"].as_f64().unwrap() > 0.8,
+            (leaning["q"]["noul"].as_f64().unwrap() - 0.75).abs() < 1e-9,
             "weight moves the pool"
         );
         assert_eq!(leaning["c"]["choice"], "A");
