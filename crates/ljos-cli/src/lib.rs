@@ -15454,7 +15454,7 @@ mod tests {
             (true, (5, 100)),
             "kills of unknown age are recent"
         );
-        assert_eq!(oom_recent(5, Some((5, 100)), 100 + day - 1).0, true);
+        assert!(oom_recent(5, Some((5, 100)), 100 + day - 1).0);
         assert_eq!(
             oom_recent(5, Some((5, 100)), 100 + day),
             (false, (5, 100)),
