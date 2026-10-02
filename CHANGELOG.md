@@ -2,7 +2,7 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
-## Unreleased
+## 0.23.1 (2026-10-02)
 
 - `ljos upgrade` stages its download under `~/.cache/ljos`, on the home
   filesystem; on a host whose `/tmp` is a full, quota'd tmpfs the
