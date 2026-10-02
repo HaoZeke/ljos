@@ -1,18 +1,82 @@
 # ljos
 
-What does this seat do next? One seat over five habitats and argv law. Each habitat keeps its own crate.
+Memory, a work tracker and a shell-command gate for coding agents: Claude Code,
+Codex, Grok Build, Antigravity's `agy`, opencode, omp and hermes.
+
+An agent forgets what it learned when the session ends, and it runs whatever
+command it decides on. ljos keeps the lessons in a local store and hands the
+ones that bear on a prompt back to the agent before it answers. It records the
+work on a tracker the agent and the person both read. It checks each shell
+command against rules the person wrote before it runs. It works through each
+runner's MCP server list and its hooks. Nothing leaves the machine unless you
+turn on a remote judge.
+
+## Five minutes
 
 ```
-cargo binstall ljos packset
-ljos remember "The lexical default is BM25+. It beat BM25 by two points on turns."
-07be8829... lesson due 2026-09-26T23:27:31.528Z
-ljos search lexical default
-1.0000 3/3 lesson 07be8829... today The lexical default is BM25+. It beat BM25 by two points on turns.
+cargo binstall ljos packset vissue-cli      # or: cargo install ljos packset vissue-cli
+ljos onboard --harness claude               # MCP server, hooks and skill for Claude Code
+ljos prefer "Tag a release with git push origin TAG; --follow-tags leaves v-tags behind."
+ljos rule '*--force*' --verdict deny --why "Never force push."
 ```
 
-That installs `ljos` and `ljos-mcp`. `ljos remember` starts the writer when none is answering. `cargo install ljos packset` is the same without `cargo-binstall`.
+`--harness` takes `claude`, `codex`, `grok`, `antigravity`, `opencode`, `omp`
+or `hermes`. Start a new session and ask for something the preference bears
+on, such as tagging a release. Before the model reads the prompt, the hook
+adds:
 
-Citing a deed names it; the bytes stay in deedar. Neither a finish nor completing a node closes the ticket; `finish --close` does, when the work is accepted. Cards are read-only. Consensus is a [different crate](https://github.com/leidarljos/consensus).
+```
+What this seat already knows that bears on this (from the pack, each with its age, lessons oldest first; `ljos search` for more):
+- [preference, today] Tag a release with git push origin TAG; --follow-tags leaves v-tags behind.
+```
+
+A preference stands from the moment it is written. A lesson (`ljos remember`)
+comes back once a review or a consolidation promotes it; `ljos due` lists the
+ones waiting.
+
+When the agent then reaches for `git push --force origin main`, the runner
+refuses the command before it runs:
+
+```
+{"permissionDecision":"deny","permissionDecisionReason":"Never force push. (seat rule `*--force*`)"}
+```
+
+## What you get
+
+- Memory per prompt: one claim per memory, searched with the prompt and
+  injected only when it shares the prompt's words or a judge is sure it bears
+  on it. Lessons come back on a review clock, and a wrong one is superseded,
+  not edited.
+- A tracker, [vissue](https://github.com/leidarljos/vissue): plain org files
+  in a git repository. `ljos sitting ISSUE` opens the work and claims it;
+  `ljos finish ISSUE --lesson "..."` closes the loop and records what it
+  taught.
+- A gate on shell commands: rules in the pack (`ljos rule`), tried on each
+  command a line runs, and a guard that keeps agents from rewriting the
+  gate's own binaries and hook files. Pushes are free to your own unreleased
+  repositories and cite a decision elsewhere.
+- Decisions with more than one defensible answer go to personas, voters with
+  a view of their own, and settle by trust-weighted
+  [consensus](https://github.com/leidarljos/consensus) that learns from the
+  outcome. A persona can reason in a runner session it keeps.
+- Deeds ([deedar](https://github.com/leidarljos/deedar)): content-addressed
+  records of what a piece of work produced, cited on the ticket.
+
+## Words
+
+| word | meaning |
+|---|---|
+| seat | one agent runner on one machine, with the memory and claims it holds |
+| pack | the memory store ([packset](https://github.com/leidarljos/packset)), one claim per atom |
+| sitting | one piece of work on one ticket, opened by `ljos sitting` and closed by `ljos finish` |
+| island | the memories a title activates, and the links between them |
+| deed | a signed record of what a piece of work produced |
+| card | a file the person froze; agents read it and never write it |
+| persona | a voter with a view, an anchor and the domains it speaks to |
+
+## Commands
+
+Citing a deed names it; the bytes stay in deedar. Neither a finish nor completing a node closes the ticket; `finish --close` does, when the work is accepted.
 
 ```
 ljos sitting vissue-xxxx --playbook sit        # doctor, cards, due, island, playbook, recall, timeline, claim

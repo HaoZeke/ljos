@@ -4,6 +4,16 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
+- `ljos onboard --harness NAME` works with no runners file: a runner the
+  seat ships a shape for (claude, codex, grok, antigravity, opencode, omp,
+  hermes) is onboarded from that shape, which is added to
+  `~/.config/ljos/harnesses.toml` so the doctor and persona sessions know
+  it.
+- Rules and the TCB judge each command a line runs, as written and with
+  its prefixes off, and no longer the raw line, so a heredoc body that
+  names a flag or a command is data and not a command.
+- The README opens with what ljos is and for whom, a five-minute first run
+  with the output it gives, and a glossary; the command list follows.
 - `vissue vote ID` with no `--for` and no `--withdraw` reads the tally
   and is not refused; the seat rule on `vissue vote*` had denied a read.
 - The seat command named in a tracker-verb deny drops the shell's

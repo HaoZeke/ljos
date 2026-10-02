@@ -9,7 +9,7 @@ rust-version = "1.89"
 license = "MIT"
 repository = "https://github.com/leidarljos/ljos"
 homepage = "https://leidarljos.github.io"
-description = "One seat CLI over cards, packset, deedar, vissue, claimdag, and policyd"
+description = "Memory, a work tracker and a shell-command gate for coding agents over MCP and hooks."
 
 [workspace.dependencies]
 rmcp = { version = "3.2", features = ["server", "transport-io", "transport-async-rw", "macros"] }

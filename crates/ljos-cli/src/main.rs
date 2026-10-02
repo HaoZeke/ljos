@@ -11,13 +11,13 @@ use ljos_cli::{
     identity_or_seat, island_entities, join, learn_anchors, learn_and_write, learn_reading,
     learn_shared, mark_seen, now_utc, on_path, onboard, pack, packset_consolidate, packset_forget,
     packset_hubs, packset_island_as, packset_search_as_of, packset_write_as, panel, panel_steps,
-    parse_every, personas_from_pack, playbooks_from_pack, policy_with_memory, policyd_required,
-    post_hook_stdout, predictions_of, prompt_hook_stdout, read_campaign, receive, release,
-    remember_findings, resolve_assignee, rows_about, rules_from_pack, run, run_as, run_captured,
-    session_end, sitting_gated, stop_hook_stdout, tcb_check, timeline, topic_words,
-    tracker_show_json, trim_num, trust_from_pack, verdict_for, whoami, withdraw_prediction,
-    write_persona, write_prediction, write_rule, write_trust, Persona, Reading, Rule, Trust,
-    HARNESSES_EXAMPLE, LEARN_BETA, POLICY_TCB, PROTOCOL,
+    parse_every, personas_from_pack, playbooks_from_pack, policy_with_memory, post_hook_stdout,
+    predictions_of, prompt_hook_stdout, read_campaign, receive, release, remember_findings,
+    resolve_assignee, rows_about, rules_from_pack, run, run_as, run_captured, session_end,
+    sitting_gated, stop_hook_stdout, timeline, topic_words, tracker_show_json, trim_num,
+    trust_from_pack, verdict_for, whoami, withdraw_prediction, write_persona, write_prediction,
+    write_rule, write_trust, Persona, Reading, Rule, Trust, HARNESSES_EXAMPLE, LEARN_BETA,
+    POLICY_TCB, PROTOCOL,
 };
 use std::path::PathBuf;
 
@@ -926,19 +926,7 @@ fn main() -> Result<()> {
             let tcb_rule = if guarded.is_some() {
                 guarded
             } else if (call.event == "PreToolUse" || call.event == "argv") && !argv.is_empty() {
-                match tcb_check(&argv) {
-                    Some(t) if t.starts_with("deny") => Some(Rule {
-                        pattern: "ljos-policyd".into(),
-                        verdict: "deny".into(),
-                        reason: t.split('\t').nth(1).unwrap_or("tcb").to_string(),
-                    }),
-                    None if policyd_required() => Some(Rule {
-                        pattern: "ljos-policyd".into(),
-                        verdict: "deny".into(),
-                        reason: "TCB required".to_string(),
-                    }),
-                    _ => None,
-                }
+                ljos_cli::tcb_verdict(&call.cue)
             } else {
                 None
             };

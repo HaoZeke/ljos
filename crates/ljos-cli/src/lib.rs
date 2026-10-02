@@ -1602,7 +1602,27 @@ pub fn onboard_from(file: &Path, harness: &str, dry: bool) -> Result<Vec<Step>> 
         return Ok(steps);
     }
     let all = harnesses_from(file)?;
-    let Some(h) = all.harness.iter().find(|h| h.name == harness) else {
+    // A runner the seat ships a shape for is onboarded from that shape when
+    // the file does not name it, and the shape is written into the file so
+    // the doctor and persona sessions know the runner too: a first
+    // `ljos onboard --harness claude` needs no file of its own.
+    let shipped: Harnesses = toml::from_str(HARNESSES_EXAMPLE).unwrap_or_default();
+    let from_shipped = shipped
+        .harness
+        .iter()
+        .find(|h| h.name == harness && !h.name.starts_with("runner-with-"))
+        .filter(|_| !all.harness.iter().any(|h| h.name == harness))
+        .cloned();
+    let mut shipped_step = None;
+    if let Some(h) = &from_shipped {
+        shipped_step = Some(adopt_shipped_shape(file, h, dry));
+    }
+    let Some(h) = all
+        .harness
+        .iter()
+        .find(|h| h.name == harness)
+        .or(from_shipped.as_ref())
+    else {
         let names: Vec<&str> = all.harness.iter().map(|h| h.name.as_str()).collect();
         bail!(
             "onboard: no runner {harness:?} in {}; it names {}. `ljos onboard --example` \
@@ -1617,7 +1637,8 @@ pub fn onboard_from(file: &Path, harness: &str, dry: bool) -> Result<Vec<Step>> 
     };
     let server = server_path()?;
     let dependencies = [pack_step(dry), host_key_step(dry)];
-    let mut steps = vec![register_step(h, &server, dry)];
+    let mut steps: Vec<Step> = shipped_step.into_iter().collect();
+    steps.push(register_step(h, &server, dry));
     if let Some(file) = &h.hooks {
         steps.push(match &h.hooks_named {
             Some(name) => named_hook_step(&expand(file), name, dry),
@@ -1637,6 +1658,51 @@ pub fn onboard_from(file: &Path, harness: &str, dry: bool) -> Result<Vec<Step>> 
     }
     steps.extend(dependencies);
     Ok(steps)
+}
+
+/// Append a shipped runner shape to the runners file, as a table of its
+/// own, so the runner is named there from now on.
+fn adopt_shipped_shape(file: &Path, h: &Harness, dry: bool) -> Step {
+    let what = "runners file".to_string();
+    if dry {
+        return Step {
+            what,
+            detail: format!(
+                "would add the shipped {} shape to {}",
+                h.name,
+                file.display()
+            ),
+            ok: true,
+        };
+    }
+    let table = toml::to_string(&Harnesses {
+        harness: vec![h.clone()],
+    })
+    .unwrap_or_default();
+    let mut text = std::fs::read_to_string(file).unwrap_or_default();
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(&format!(
+        "\n# The shipped {} shape, added by ljos onboard.\n{table}",
+        h.name
+    ));
+    let written = file
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(file, text));
+    match written {
+        Ok(()) => Step {
+            what,
+            detail: format!("added the shipped {} shape to {}", h.name, file.display()),
+            ok: true,
+        },
+        Err(e) => Step {
+            what,
+            detail: format!("{}: {e}", file.display()),
+            ok: false,
+        },
+    }
 }
 
 /// The events the memory hook fires on when a runner's table names none:
@@ -6920,7 +6986,13 @@ pub fn gate_push(rule: Option<&Rule>, line: &str, cwd: Option<&str>) -> Option<R
 /// command in it. Returns the rule that fired.
 #[must_use]
 pub fn verdict_for<'a>(rules: &'a [Rule], line: &str) -> Option<&'a Rule> {
-    let mut cues = vec![line.trim().to_string()];
+    // Each command as written, so a rule on a prefix still sees it, and
+    // with its prefixes off; never the raw line, which carries heredoc
+    // bodies and other data the shell does not run.
+    let mut cues: Vec<String> = raw_segments(line)
+        .iter()
+        .map(|s| s.trim().to_string())
+        .collect();
     cues.extend(command_segments(line));
     let fires = |r: &Rule| cues.iter().any(|c| rule_matches(&r.pattern, c));
     rules
@@ -11449,6 +11521,37 @@ pub fn policyd_bin() -> Option<std::path::PathBuf> {
         .or_else(|| which::which("ljos-policyd").ok())
 }
 
+/// The TCB's verdict on a shell line: `ljos-policyd` judges each command
+/// the line runs, as written, and the first deny stands. A heredoc body is
+/// data the shell feeds a command, and it is not sent as argv. With the TCB
+/// required and absent, the line is refused.
+#[must_use]
+pub fn tcb_verdict(line: &str) -> Option<Rule> {
+    let mut answered = false;
+    for seg in raw_segments(line) {
+        let argv: Vec<String> = seg.split_whitespace().map(String::from).collect();
+        if argv.is_empty() {
+            continue;
+        }
+        match tcb_check(&argv) {
+            Some(t) if t.starts_with("deny") => {
+                return Some(Rule {
+                    pattern: "ljos-policyd".into(),
+                    verdict: "deny".into(),
+                    reason: t.split('\t').nth(1).unwrap_or("tcb").to_string(),
+                });
+            }
+            Some(_) => answered = true,
+            None => {}
+        }
+    }
+    (!answered && policyd_required()).then(|| Rule {
+        pattern: "ljos-policyd".into(),
+        verdict: "deny".into(),
+        reason: "TCB required".to_string(),
+    })
+}
+
 /// One line from `ljos-policyd check -- argv`. None if the binary is absent
 /// or failed to start. Absence is not a deny.
 pub fn tcb_check(argv: &[String]) -> Option<String> {
@@ -15963,6 +16066,27 @@ mod tests {
     }
 
     #[test]
+    fn a_first_onboard_needs_no_runners_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("harnesses.toml");
+        let step = adopt_shipped_shape(
+            &file,
+            &toml::from_str::<Harnesses>(HARNESSES_EXAMPLE)
+                .unwrap()
+                .harness
+                .into_iter()
+                .find(|h| h.name == "claude")
+                .unwrap(),
+            false,
+        );
+        assert!(step.ok, "{step:?}");
+        let back = harnesses_from(&file).unwrap();
+        assert_eq!(back.harness.len(), 1);
+        assert_eq!(back.harness[0].name, "claude");
+        assert_eq!(back.harness[0].resume, ["claude", "--continue"]);
+    }
+
+    #[test]
     fn a_heredoc_body_is_data_not_commands() {
         let line = "cat > job.sbatch <<'EOF'\n#!/bin/bash\ncargo build --release\nEOF\nscp job.sbatch rg.terra: && ssh rg.terra sbatch job.sbatch";
         let segs = command_segments(line);
@@ -15986,6 +16110,29 @@ mod tests {
         assert!(
             verdict_for(&rules, line).is_none(),
             "a script written by a heredoc is not run here"
+        );
+        let force = vec![Rule {
+            pattern: "*--force*".into(),
+            verdict: "deny".into(),
+            reason: "no".into(),
+        }];
+        assert!(
+            verdict_for(
+                &force,
+                "python3 - <<'PY'\nopen('r.md','w').write('git push --force')\nPY"
+            )
+            .is_none(),
+            "a heredoc body naming a flag is data"
+        );
+        assert!(verdict_for(&force, "git push --force origin main").is_some());
+        let root = vec![Rule {
+            pattern: "*sudo*".into(),
+            verdict: "ask".into(),
+            reason: "root".into(),
+        }];
+        assert!(
+            verdict_for(&root, "cd x && sudo make install").is_some(),
+            "a prefix still meets a rule on it"
         );
         assert!(verdict_for(&rules, "cd x && cargo build").is_some());
         assert!(

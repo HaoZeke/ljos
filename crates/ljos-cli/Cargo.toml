@@ -6,9 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Write one claim, search it back. Standing memory for an agent seat."
+description = "Memory, a work tracker and a shell-command gate for coding agents (Claude Code, Codex, Grok Build, agy, opencode) over MCP and hooks."
 readme = "../../README.md"
-keywords = ["mcp", "memory", "agents", "cli"]
+keywords = ["mcp", "agent-memory", "claude-code", "codex", "ai-agents"]
 categories = ["command-line-utilities", "development-tools"]
 
 [package.metadata.binstall]
