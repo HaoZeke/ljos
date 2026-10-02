@@ -2,7 +2,7 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
-## Unreleased
+## 0.22.1 (2026-10-02)
 
 - `ljos doctor`'s host row fails while the kernel's OOM count rises and
   for a day after, then says how many since boot with none in the last
