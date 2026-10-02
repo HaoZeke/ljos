@@ -973,6 +973,26 @@ fn own_ancestry() -> Vec<(u32, String)> {
         .collect()
 }
 
+/// Whether this process runs under an agent runner: the environment
+/// carries a runner's conversation, or a process above it is a runner,
+/// one whose server left a seat record or one the runners file names.
+/// Consent is the person's, so the verbs that grant it refuse here.
+#[must_use]
+pub fn under_a_runner() -> bool {
+    if std::env::vars().any(|(k, v)| runner_session_var(&k, &v))
+        || std::env::var_os("CLAUDECODE").is_some()
+    {
+        return true;
+    }
+    let mut runners: Vec<String> = harnesses_from(&harnesses_path())
+        .map(|all| all.harness.into_iter().map(|h| h.name).collect())
+        .unwrap_or_default();
+    runners.extend(["agy", "antigravity"].map(String::from));
+    own_ancestry()
+        .iter()
+        .any(|(pid, comm)| seat_record_path(*pid).exists() || runners.iter().any(|r| r == comm))
+}
+
 /// Path components that name a place, not a program.
 const PLACES: &[&str] = &[
     "bin",
@@ -6407,6 +6427,7 @@ pub const SEAT_PATHS: &[&str] = &[
     "/.grok/hooks/ljos.json",
     "/.config/opencode/plugins/ljos.ts",
     "/.omp/agent/extensions/ljos.ts",
+    "/ljos/approvals",
 ];
 
 /// Whether a path names one of [`SEAT_PATHS`]; a backup beside a binary
@@ -15284,6 +15305,16 @@ mod tests {
             "a deny is the rule's own"
         );
         assert_eq!(gate_push(None, "git push", None), None);
+    }
+
+    #[test]
+    fn consent_is_refused_under_a_runner() {
+        // Safety: the variable is this test's own and is removed after.
+        unsafe { std::env::set_var("ACMEAGENT_CONVERSATION_ID", "0199a1b2-c3d4-e5f6") };
+        assert!(under_a_runner());
+        assert!(approval::approve("0".repeat(32).as_str()).is_err());
+        unsafe { std::env::remove_var("ACMEAGENT_CONVERSATION_ID") };
+        assert!(seat_guard("rm -rf /run/user/1000/ljos/approvals").is_some());
     }
 
     #[test]

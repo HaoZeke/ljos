@@ -8,13 +8,13 @@ use ljos_cli::{
     format_consolidation, format_doctor, format_findings, format_hits, format_hubs, format_island,
     format_personas, format_playbooks, format_readings, format_remembered, format_seat,
     format_steps, format_write_ack, graded, habit, habits, handover, healthy, hook_note,
-    identity_or_seat, island_entities, join, learn_anchors, learn_and_write,
-    learn_reading, learn_shared, mark_seen, now_utc, on_path, onboard, pack, packset_consolidate,
-    packset_forget, packset_hubs, packset_island_as, packset_search_as_of, packset_write_as, panel,
-    panel_steps, parse_every, personas_from_pack, playbooks_from_pack, policy_with_memory,
-    policyd_required, post_hook_stdout, predictions_of, prompt_hook_stdout, read_campaign, receive,
-    release, remember_findings, resolve_assignee, rows_about, rules_from_pack, run, run_as,
-    run_captured, session_end, sitting_gated, stop_hook_stdout, tcb_check, timeline, topic_words,
+    identity_or_seat, island_entities, join, learn_anchors, learn_and_write, learn_reading,
+    learn_shared, mark_seen, now_utc, on_path, onboard, pack, packset_consolidate, packset_forget,
+    packset_hubs, packset_island_as, packset_search_as_of, packset_write_as, panel, panel_steps,
+    parse_every, personas_from_pack, playbooks_from_pack, policy_with_memory, policyd_required,
+    post_hook_stdout, predictions_of, prompt_hook_stdout, read_campaign, receive, release,
+    remember_findings, resolve_assignee, rows_about, rules_from_pack, run, run_as, run_captured,
+    session_end, sitting_gated, stop_hook_stdout, tcb_check, timeline, topic_words,
     tracker_show_json, trim_num, trust_from_pack, verdict_for, whoami, withdraw_prediction,
     write_persona, write_prediction, write_rule, write_trust, Persona, Reading, Rule, Trust,
     HARNESSES_EXAMPLE, LEARN_BETA, POLICY_TCB, PROTOCOL,
@@ -1011,7 +1011,10 @@ fn main() -> Result<()> {
                     prompt_hook_stdout(call.shape, call.session.as_deref(), &ctx, &ids)
                 }
             };
-            print!("{}", ljos_cli::approval::hook_output(&input, &call, &context, verdict));
+            print!(
+                "{}",
+                ljos_cli::approval::hook_output(&input, &call, &context, verdict)
+            );
         }
         Cmd::Consensus { id } => {
             // Rows scoped to a domain apply when the issue is about it; the

@@ -231,6 +231,14 @@ fn root() -> PathBuf {
 /// Record explicit consent for the pending request named by the hook.
 /// The grant permits one matching attempt within the request's lifetime.
 pub fn approve(id: &str) -> Result<String> {
+    // SAFETY: isatty reads one descriptor's mode and cannot fail.
+    let terminal = unsafe { libc::isatty(0) } == 1;
+    if crate::under_a_runner() || !terminal {
+        bail!(
+            "approve: consent is the person's. This runs under an agent runner or without a \
+             terminal; the person runs `ljos approve {id}` in a terminal of their own"
+        );
+    }
     Store::open(&root(), now()?)?.approve(id)
 }
 
@@ -264,7 +272,7 @@ fn hook_output_at(
         result => {
             let mut pending = rule.clone();
             let detail = match result {
-                Ok(Some(id)) => format!("After explicit approval, run `ljos approve {id}` and retry this command. The grant is for one attempt in this directory and conversation and expires fifteen minutes after the request."),
+                Ok(Some(id)) => format!("Ask the person to run `ljos approve {id}` in a terminal of their own (it refuses under an agent), then retry this command once they say it is done. The grant is for one attempt in this directory and conversation and expires fifteen minutes after the request."),
                 Err(error) => format!("Approval could not be recorded: {error:#}. The command remains blocked."),
                 Ok(None) => unreachable!(),
             };

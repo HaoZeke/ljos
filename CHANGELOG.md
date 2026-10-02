@@ -4,6 +4,15 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
+- An `ask` on a runner that cannot ask prints a request id; the person
+  grants that one command with `ljos approve ID`, for one attempt in
+  that directory and conversation, within fifteen minutes. `approve`
+  refuses under an agent runner (a runner's conversation in the
+  environment, or a runner above it) or without a terminal, so an agent
+  cannot grant itself consent, and the approval store is a seat path
+  the guard keeps agents out of.
+- agy's conversation id names its holder, and its prompt is read out of
+  the `<USER_REQUEST>` wrapper.
 - The seat guards its own law. Before any rule, a shell command that
   writes the seat's binaries (`ljos`, `ljos-mcp`, `ljos-policyd`), its
   config or a runner's hook registration (`~/.codex/hooks.json`,
