@@ -4,6 +4,20 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
+- Judging is a decision layer over named judges. `[judges.NAME]` tables
+  in `jev.toml` each name a backend, model, key (`key_file`, `key_cmd`,
+  or the new `key_env`) and `weight`. `[route]` names the judges for
+  each decision: `prompt`, `ballot`, `audit`, `review`. The top-level
+  keys stay the `default` judge, so an existing file reads as before.
+  Judges on one decision are asked at once and pooled (log-odds mean,
+  geometric mean of distributions, score mean); the log keeps every
+  judge's answer beside the pool. `command_mode = "prompt"` lets a
+  harness's one-shot mode judge: the questions as its last argument,
+  the first JSON object it prints as the answer.
+- `ljos due --judge`: the review judges weigh each claim on the due
+  page against the pack's newer claims on it. A claim that holds at 0.9
+  is graded recalled, a contradicted one (0.1) is named to supersede or
+  withdraw, and the rest stay due; a judge never lapses a claim.
 - Antigravity's `agy` is a runner: `ljos onboard --harness antigravity`
   registers the server in `~/.gemini/config/mcp_config.json`, writes the
   skill under `~/.gemini/config/skills`, and puts the seat's hooks under

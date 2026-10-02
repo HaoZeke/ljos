@@ -364,6 +364,10 @@ enum Cmd {
         /// List every due atom to read; none of them is put up for grading.
         #[arg(long)]
         all: bool,
+        /// Put the page to the review judges: a claim they find holds is
+        /// graded recalled, a contradicted one is named, the rest stay due.
+        #[arg(long, conflicts_with = "all")]
+        judge: bool,
     },
     /// Put an eb-stack bundle's modules on the tracker: one child issue per module under the parent, blockers along the dependency edges, the same ids on every run. `vissue ready` then lists what a seat can build now.
     BumpPlan {
@@ -1054,7 +1058,13 @@ fn main() -> Result<()> {
                 println!("{line}");
             }
         }
-        Cmd::Due { all } => print!("{}", due_report(all)?),
+        Cmd::Due { all, judge } => {
+            if judge {
+                print!("{}", ljos_cli::judge_due_page()?);
+            } else {
+                print!("{}", due_report(all)?);
+            }
+        }
         Cmd::BumpPlan {
             bundle,
             project,

@@ -196,6 +196,52 @@ cost, and the doctor row counts those answers as cached. A panel asked
 twice, a retried ballot and a repeated prompt with the same claims all
 hit it. =cache_days = 0= turns it off.
 
+Two or more judges can answer side by side. Each =[judges.NAME]= table
+names a judge. =[route]= says which judges answer each decision. Here a chat
+model on an OpenAI-compatible endpoint judges the prompt, Jev and that
+model pool their ballots, and a runner's one-shot mode reviews due
+claims:
+
+#+begin_src toml
+enabled = true
+key_file = "~/.config/ljos/jev.key"     # the default judge: Jev
+
+[judges.chat]
+backend = "chat"
+endpoint = "https://llm.example.org/v1"
+model = "local-120b"
+key_env = "LLM_API_KEY"
+budget_ms = 6000
+
+[judges.runner]
+backend = "command"
+command_mode = "prompt"
+command = ["omp", "-p", "--no-session", "--model", "smol"]
+budget_ms = 30000
+
+[route]
+prompt = ["chat"]
+ballot = ["default", "chat"]
+audit = ["chat"]
+review = ["runner"]
+#+end_src
+
+A decision with two or more judges is answered by their pool. A
+probability is the weighted mean of the judges' log-odds. Two judges at
+0.8 stay at 0.8, and judges at 0.9 and 0.1 meet at 0.5. A choice is
+the normalised weighted geometric mean of their distributions, and a
+score the weighted mean. =weight= in a judge's table moves its share. A
+question no judge answered is missing from the pool, so the caller falls
+back as it does on a partial reply. The log keeps every judge's answer
+beside the pool, so each judge can be scored once outcomes are known.
+
+=ljos due --judge= puts the due page to the =review= judges. Each claim
+goes with the newer claims the pack keeps on the same subject. A claim
+the pool puts at 0.9 or more is graded recalled. One at 0.1 or less
+is printed as contradicted, for the agent to supersede or withdraw, and
+stays due. Everything between stays due. No judge lapses a claim,
+because a lapse says that a reader forgot it.
+
 The hook falls back to its local path on any of these: no file,
 =enabled = false=, no key, an error, or no answer inside =budget_ms=
 (2000).

@@ -7830,6 +7830,67 @@ pub fn due_report(all: bool) -> Result<String> {
     ))
 }
 
+/// The newer claims the pack holds on what `claim` says: the review
+/// judge's evidence. Its own row and anything older are left out.
+fn newer_on(id: &str, claim: &str, ts: Option<&str>) -> Vec<String> {
+    packset_search_opts(claim, 8, false)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|h| h.id.as_deref() != Some(id))
+        .filter(|h| match (h.ts.as_deref(), ts) {
+            (Some(newer), Some(old)) => newer > old,
+            _ => true,
+        })
+        .take(5)
+        .map(|h| h.text)
+        .collect()
+}
+
+/// `ljos due --judge`: the review judges weigh each claim on the page
+/// against the newer claims about it. One that holds at
+/// [`jev::REVIEW_HOLDS_AT`] is graded recalled; one at or under
+/// [`jev::REVIEW_FAILS_AT`] is named for the agent to supersede or
+/// withdraw, and stays due; the rest stay due. No claim is lapsed by a
+/// judge, since a lapse says a reader forgot it.
+pub fn judge_due_page() -> Result<String> {
+    if jev::config().is_none() {
+        bail!(
+            "due --judge: no judge is on; ~/.config/ljos/jev.toml names them, with a `review` route"
+        );
+    }
+    let (shown, total, summary) = due_page()?;
+    let mut out = String::new();
+    let mut held = 0;
+    for a in &shown {
+        let (Some(id), Some(text)) = (a["id"].as_str(), a["text"].as_str()) else {
+            continue;
+        };
+        let newer = newer_on(id, text, a["ts"].as_str());
+        let refs: Vec<&str> = newer.iter().map(String::as_str).collect();
+        let line = match jev::review(id, text, &refs) {
+            Some(p) if p >= jev::REVIEW_HOLDS_AT => match graded(id, true) {
+                Ok(_) => {
+                    held += 1;
+                    format!("recalled\t{p:.2}\t{id}\t{text}")
+                }
+                Err(e) => format!("left\t{p:.2}\t{id}\t{e:#}"),
+            },
+            Some(p) if p <= jev::REVIEW_FAILS_AT => {
+                format!("contradicted\t{p:.2}\t{id}\t{text}  (supersede or withdraw it)")
+            }
+            Some(p) => format!("unsure\t{p:.2}\t{id}\t{text}"),
+            None => format!("unanswered\t-\t{id}\t{text}"),
+        };
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out.push_str(&format!(
+        "{held} of {} on the page graded by the judges; {total} were due. {summary}\n",
+        shown.len()
+    ));
+    Ok(out)
+}
+
 /// How long a due row stays open to `graded` after a page showed it.
 pub const DUE_SHOWN_TTL_S: u64 = 3600;
 

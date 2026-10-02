@@ -16,6 +16,15 @@
 //! request to an argv on stdin and reads the answers from its stdout, so a
 //! harness on the machine can be the judge. Both answer in the shape Jev
 //! does, so the parsers, the cache, the ledger and the callers are shared.
+//!
+//! Several judges can stand side by side: `[judges.NAME]` tables each name
+//! a backend, a model and a key, and `[route]` names which judges answer
+//! each decision (`prompt`, `ballot`, `audit`, `review`). A decision put to
+//! more than one judge is answered by their pool: probabilities by the
+//! weighted mean of their log-odds, choices by the normalised weighted
+//! geometric mean of their distributions, scores by the weighted mean. The
+//! top-level keys are the judge named `default`, which answers every
+//! decision no route names.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -55,6 +64,60 @@ impl Backend {
     }
 }
 
+/// How the `command` backend talks to its argv.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CommandMode {
+    /// The request JSON on stdin, `{"answers": ...}` on stdout.
+    #[default]
+    Request,
+    /// The questions as one prompt, the last argument, and the first JSON
+    /// object in what it prints: a harness's one-shot mode (`omp -p`,
+    /// `grok -p`, `hermes -z`) judges with no adapter.
+    Prompt,
+}
+
+/// One judge: where a decision is sent and how.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct Judge {
+    #[serde(default)]
+    pub backend: Backend,
+    #[serde(default)]
+    pub command: Option<Vec<String>>,
+    #[serde(default)]
+    pub command_mode: CommandMode,
+    #[serde(default)]
+    pub key_file: Option<String>,
+    #[serde(default)]
+    pub key_cmd: Option<Vec<String>>,
+    /// An environment variable holding the key.
+    #[serde(default)]
+    pub key_env: Option<String>,
+    #[serde(default = "default_model")]
+    pub model: String,
+    #[serde(default = "default_endpoint")]
+    pub endpoint: String,
+    #[serde(default = "default_budget")]
+    pub budget_ms: u64,
+    #[serde(default = "default_price_in")]
+    pub usd_per_mtok_in: f64,
+    /// This judge's weight in a pool.
+    #[serde(default = "default_weight")]
+    pub weight: f64,
+}
+
+fn default_weight() -> f64 {
+    1.0
+}
+
+/// The decisions a route can name, and the log kind each is asked under.
+pub const DECISIONS: &[(&str, &str)] = &[
+    ("prompt", "hook"),
+    ("ballot", "ballot"),
+    ("audit", "stop-audit"),
+    ("review", "review"),
+];
+
 /// `~/.config/ljos/jev.toml`.
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Config {
@@ -68,6 +131,20 @@ pub struct Config {
     /// stdin and prints `{"answers": ...}` on stdout inside `budget_ms`.
     #[serde(default)]
     pub command: Option<Vec<String>>,
+    /// How the `command` backend is spoken to: `request` or `prompt`.
+    #[serde(default)]
+    pub command_mode: CommandMode,
+    /// An environment variable holding the key.
+    #[serde(default)]
+    pub key_env: Option<String>,
+    /// Further judges by name, beside the top-level `default`.
+    #[serde(default)]
+    pub judges: BTreeMap<String, Judge>,
+    /// Which judges answer a decision: `prompt`, `ballot`, `audit` or
+    /// `review` to a list of judge names. A decision no route names goes to
+    /// `default`.
+    #[serde(default)]
+    pub route: BTreeMap<String, Vec<String>>,
     /// A file holding the key, one line, mode 0600.
     #[serde(default)]
     pub key_file: Option<String>,
@@ -204,17 +281,26 @@ fn key_from(text: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_string())
 }
 
-fn key_cache() -> Option<PathBuf> {
+fn key_cache(judge: &str) -> Option<PathBuf> {
     let dir = std::env::var_os("XDG_RUNTIME_DIR").filter(|v| !v.is_empty())?;
-    Some(PathBuf::from(dir).join("ljos").join("jev-key"))
+    let file = if judge == "default" {
+        "jev-key".to_string()
+    } else {
+        let safe: String = judge
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
+        format!("jev-key-{safe}")
+    };
+    Some(PathBuf::from(dir).join("ljos").join(file))
 }
 
 /// Run the key command once, with no terminal to prompt on and three
 /// seconds to answer, and hold what it printed for the rest of the login.
-fn key_by_command(argv: &[String]) -> Option<String> {
+fn key_by_command(judge: &str, argv: &[String]) -> Option<String> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
-    let cache = key_cache();
+    let cache = key_cache(judge);
     if let Some(key) = cache
         .as_ref()
         .and_then(|p| std::fs::read_to_string(p).ok())
@@ -250,24 +336,97 @@ fn key_by_command(argv: &[String]) -> Option<String> {
     Some(key)
 }
 
-/// The machine's Jev setting, when it turned Jev on, its key is there and
-/// the month's spend is under its cap.
+impl Config {
+    /// The judge the top-level keys describe.
+    #[must_use]
+    pub fn default_judge(&self) -> Judge {
+        Judge {
+            backend: self.backend,
+            command: self.command.clone(),
+            command_mode: self.command_mode,
+            key_file: self.key_file.clone(),
+            key_cmd: self.key_cmd.clone(),
+            key_env: self.key_env.clone(),
+            model: self.model.clone(),
+            endpoint: self.endpoint.clone(),
+            budget_ms: self.budget_ms,
+            usd_per_mtok_in: self.usd_per_mtok_in,
+            weight: 1.0,
+        }
+    }
+
+    /// The judge called `name`; `default` is the top-level one.
+    #[must_use]
+    pub fn judge(&self, name: &str) -> Option<Judge> {
+        if name == "default" {
+            Some(self.default_judge())
+        } else {
+            self.judges.get(name).cloned()
+        }
+    }
+
+    /// The names that answer `decision`, as the route gives them.
+    #[must_use]
+    pub fn route_of(&self, decision: &str) -> Vec<String> {
+        self.route
+            .get(decision)
+            .filter(|r| !r.is_empty())
+            .cloned()
+            .unwrap_or_else(|| vec!["default".to_string()])
+    }
+}
+
+/// The judge's key: a command, a file or an environment variable; empty
+/// for a backend that needs none. `None` when the source gives nothing.
+fn judge_key(name: &str, j: &Judge) -> Option<String> {
+    if let Some(argv) = &j.key_cmd {
+        return key_by_command(name, argv);
+    }
+    if let Some(file) = &j.key_file {
+        return key_from(&std::fs::read_to_string(expand(file)).ok()?);
+    }
+    if let Some(var) = &j.key_env {
+        return std::env::var(var).ok().filter(|k| !k.trim().is_empty());
+    }
+    (!j.backend.needs_key()).then(String::new)
+}
+
+/// Whether a judge can be asked at all: its key is there and a command
+/// judge has a command.
+fn usable(name: &str, j: &Judge) -> Option<String> {
+    if j.backend == Backend::Command && j.command.as_ref().is_none_or(Vec::is_empty) {
+        return None;
+    }
+    judge_key(name, j)
+}
+
+/// The judges that answer `decision`, each with its key; an unknown name
+/// or a judge with no key is left out.
+#[must_use]
+pub fn judges_for(cfg: &Config, decision: &str) -> Vec<(String, Judge, String)> {
+    cfg.route_of(decision)
+        .into_iter()
+        .filter_map(|name| {
+            let j = cfg.judge(&name)?;
+            let key = usable(&name, &j)?;
+            Some((name, j, key))
+        })
+        .collect()
+}
+
+/// The machine's setting, when it turned judging on, the month's spend is
+/// under its cap, and at least one judge for the prompt can be asked. The
+/// string is kept for callers that only test for a setting.
 #[must_use]
 pub fn config() -> Option<(Config, String)> {
     let cfg = read_config()?;
     if !cfg.enabled || month_cost().unwrap_or(0.0) >= cfg.monthly_usd {
         return None;
     }
-    let key = match (&cfg.key_cmd, &cfg.key_file) {
-        (Some(argv), _) => key_by_command(argv)?,
-        (None, Some(file)) => key_from(&std::fs::read_to_string(expand(file)).ok()?)?,
-        (None, None) if cfg.backend.needs_key() => return None,
-        (None, None) => String::new(),
-    };
-    if cfg.backend == Backend::Command && cfg.command.as_ref().is_none_or(Vec::is_empty) {
-        return None;
-    }
-    Some((cfg, key))
+    let any = DECISIONS
+        .iter()
+        .any(|(d, _)| !judges_for(&cfg, d).is_empty());
+    any.then(|| (cfg, String::new()))
 }
 
 /// What Jev said about one prompt.
@@ -397,46 +556,199 @@ pub fn parse(body: &Value, candidates: usize) -> Option<Judgment> {
 }
 
 /// What names the judge in the cache key: the endpoint, or the argv.
-fn judge_name(cfg: &Config) -> String {
-    match cfg.backend {
-        Backend::Jev | Backend::Chat => format!("{}/{}", cfg.endpoint, cfg.model),
-        Backend::Command => cfg.command.as_deref().unwrap_or_default().join(" "),
+fn judge_name(j: &Judge) -> String {
+    match j.backend {
+        Backend::Jev | Backend::Chat => format!("{}/{}", j.endpoint, j.model),
+        Backend::Command => j.command.as_deref().unwrap_or_default().join(" "),
     }
 }
 
-/// Send one request inside the configured budget, record its cost and
-/// log its answers; the answers object, or `None` on any failure.
-fn post(cfg: &Config, key: &str, body: Value, kind: &str, about: Value) -> Option<Value> {
-    let request = format!("{}\n{body}", judge_name(cfg));
-    if let Some(reply) = cached(&request, cfg.cache_days) {
-        count("cached");
-        return Some(reply);
+/// One judge's reply to `body`, from the cache or inside its budget.
+fn ask_one(j: &Judge, key: &str, body: &Value, cache_days: u64) -> Option<(Value, bool)> {
+    let mut body = body.clone();
+    body["model"] = Value::String(j.model.clone());
+    let request = format!("{}\n{body}", judge_name(j));
+    if let Some(reply) = cached(&request, cache_days) {
+        return Some((reply, true));
     }
-    let reply = match cfg.backend {
-        Backend::Jev => jev_post(cfg, key, body)?,
-        Backend::Chat => chat_post(cfg, key, &body)?,
-        Backend::Command => command_post(cfg, &body)?,
+    let reply = match j.backend {
+        Backend::Jev => jev_post(j, key, body)?,
+        Backend::Chat => chat_post(j, key, &body)?,
+        Backend::Command => command_post(j, &body)?,
     };
-    let answers = reply.get("answers")?.clone();
-    let cost = cost_of(&reply, cfg.usd_per_mtok_in);
-    record_cost(cost);
-    if cfg.cache_days > 0 {
+    reply.get("answers")?;
+    if cache_days > 0 {
         keep(&request, &reply);
     }
+    Some((reply, false))
+}
+
+/// Ask every judge the route names for `kind` at once, each inside its
+/// own budget, and pool what came back; record the cost and log each
+/// judge's answers beside the pool. `None` when no judge answered.
+fn post(cfg: &Config, body: Value, kind: &str, about: Value) -> Option<Value> {
+    let decision = DECISIONS
+        .iter()
+        .find(|(_, k)| *k == kind)
+        .map_or(kind, |(d, _)| *d);
+    let judges = judges_for(cfg, decision);
+    if judges.is_empty() {
+        return None;
+    }
+    let replies: Vec<(String, f64, Value, bool, f64)> = std::thread::scope(|scope| {
+        let handles: Vec<_> = judges
+            .iter()
+            .map(|(name, j, key)| {
+                let body = &body;
+                scope.spawn(move || {
+                    ask_one(j, key, body, cfg.cache_days).map(|(reply, hit)| {
+                        let cost = if hit {
+                            0.0
+                        } else {
+                            cost_of(&reply, j.usd_per_mtok_in)
+                        };
+                        (name.clone(), j.weight, reply, hit, cost)
+                    })
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .filter_map(|h| h.join().ok().flatten())
+            .collect()
+    });
+    if replies.is_empty() {
+        return None;
+    }
+    let cost: f64 = replies.iter().map(|r| r.4).sum();
+    if replies.iter().all(|r| r.3) {
+        count("cached");
+    } else {
+        record_cost(cost);
+    }
+    let weighted: Vec<(f64, Value)> = replies
+        .iter()
+        .map(|(_, w, reply, _, _)| (*w, reply["answers"].clone()))
+        .collect();
+    let answers = if replies.len() == 1 {
+        replies[0].2["answers"].clone()
+    } else {
+        pool(&body, &weighted)
+    };
+    let per: serde_json::Map<String, Value> = replies
+        .iter()
+        .map(|(name, _, reply, _, _)| (name.clone(), reply["answers"].clone()))
+        .collect();
     log(&serde_json::json!({
         "ts": crate::now_utc(),
         "kind": kind,
-        "backend": cfg.backend.name(),
-        "model": cfg.model,
+        "judges": replies.iter().map(|r| r.0.clone()).collect::<Vec<_>>(),
         "about": about,
         "answers": answers,
+        "per_judge": per,
         "cost": cost,
     }));
-    Some(reply)
+    Some(serde_json::json!({
+        "answers": answers,
+        "usage": {"cost": cost},
+    }))
+}
+
+/// One question's answers pooled across judges, weighted. A question no
+/// judge answered stays missing, so the parser refuses the pool as it
+/// refuses a partial reply.
+#[must_use]
+pub fn pool(body: &Value, replies: &[(f64, Value)]) -> Value {
+    const EPS: f64 = 0.01;
+    let logit = |p: f64| {
+        let p = p.clamp(EPS, 1.0 - EPS);
+        (p / (1.0 - p)).ln()
+    };
+    let mut out = serde_json::Map::new();
+    let Some(questions) = body["questions"].as_object() else {
+        return Value::Object(out);
+    };
+    for (name, q) in questions {
+        let given: Vec<(f64, &Value)> = replies
+            .iter()
+            .filter_map(|(w, a)| a.get(name).map(|x| (*w, x)))
+            .collect();
+        let total: f64 = given.iter().map(|g| g.0).sum();
+        if given.is_empty() || total <= 0.0 {
+            continue;
+        }
+        match q["type"].as_str().unwrap_or("noul") {
+            "score" => {
+                let v: Vec<(f64, f64)> = given
+                    .iter()
+                    .filter_map(|(w, a)| Some((*w, a["score"].as_f64()?)))
+                    .collect();
+                let t: f64 = v.iter().map(|x| x.0).sum();
+                if t > 0.0 {
+                    let s = v.iter().map(|(w, x)| w * x).sum::<f64>() / t;
+                    out.insert(
+                        name.clone(),
+                        serde_json::json!({"type": "score", "score": s}),
+                    );
+                }
+            }
+            "choice" => {
+                let keys: Vec<String> = q["criteria"]
+                    .as_object()
+                    .map(|m| m.keys().cloned().collect())
+                    .unwrap_or_default();
+                let mut logp: BTreeMap<String, f64> = BTreeMap::new();
+                let mut t = 0.0;
+                for (w, a) in &given {
+                    let Some(probs) = a["probabilities"].as_object() else {
+                        continue;
+                    };
+                    t += w;
+                    for k in &keys {
+                        let p = probs.get(k).and_then(Value::as_f64).unwrap_or(0.0).max(EPS);
+                        *logp.entry(k.clone()).or_default() += w * p.ln();
+                    }
+                }
+                if t <= 0.0 || logp.is_empty() {
+                    continue;
+                }
+                let raw: BTreeMap<String, f64> =
+                    logp.into_iter().map(|(k, l)| (k, (l / t).exp())).collect();
+                let z: f64 = raw.values().sum();
+                let probs: serde_json::Map<String, Value> = raw
+                    .iter()
+                    .map(|(k, p)| (k.clone(), Value::from(p / z)))
+                    .collect();
+                let choice = raw
+                    .iter()
+                    .max_by(|a, b| a.1.total_cmp(b.1))
+                    .map(|(k, _)| k.clone())
+                    .unwrap_or_default();
+                let confidence = concentration(&probs).unwrap_or(1.0);
+                out.insert(
+                    name.clone(),
+                    serde_json::json!({"type": "choice", "choice": choice, "confidence": confidence, "probabilities": probs}),
+                );
+            }
+            _ => {
+                let v: Vec<(f64, f64)> = given
+                    .iter()
+                    .filter_map(|(w, a)| Some((*w, a["noul"].as_f64()?)))
+                    .collect();
+                let t: f64 = v.iter().map(|x| x.0).sum();
+                if t > 0.0 {
+                    let l = v.iter().map(|(w, p)| w * logit(*p)).sum::<f64>() / t;
+                    let p = 1.0 / (1.0 + (-l).exp());
+                    out.insert(name.clone(), serde_json::json!({"type": "noul", "noul": p}));
+                }
+            }
+        }
+    }
+    Value::Object(out)
 }
 
 /// The request as Jev takes it: the body as is, the key as a bearer.
-fn jev_post(cfg: &Config, key: &str, body: Value) -> Option<Value> {
+fn jev_post(cfg: &Judge, key: &str, body: Value) -> Option<Value> {
     ureq::post(&cfg.endpoint)
         .timeout(Duration::from_millis(cfg.budget_ms))
         .set("Authorization", &format!("Bearer {key}"))
@@ -475,7 +787,23 @@ pub fn chat_request(model: &str, body: &Value) -> Value {
 
 /// The JSON object in a chat reply's content, with a code fence stripped.
 fn content_json(reply: &Value) -> Option<Value> {
-    let text = reply["choices"][0]["message"]["content"].as_str()?;
+    text_json(reply["choices"][0]["message"]["content"].as_str()?)
+}
+
+/// The questions as one prompt for a harness's one-shot mode: the answer
+/// shape, then the state and the questions.
+#[must_use]
+pub fn prompt_text(body: &Value) -> String {
+    let state = body["state"].as_str().unwrap_or("");
+    let questions = serde_json::to_string_pretty(&body["questions"]).unwrap_or_default();
+    format!(
+        "{CHAT_SYSTEM} Use no tools; print only the JSON object.\n\nState:\n{state}\n\nQuestions:\n{questions}\n"
+    )
+}
+
+/// The first JSON object in `text`, a code fence stripped.
+#[must_use]
+pub fn text_json(text: &str) -> Option<Value> {
     let text = text.trim();
     let text = text
         .strip_prefix("```json")
@@ -569,7 +897,7 @@ pub fn concentration(probs: &serde_json::Map<String, Value>) -> Option<f64> {
 
 /// One chat completion at `{endpoint}/chat/completions`, read back into
 /// Jev's shape with the prompt tokens as the usage.
-fn chat_post(cfg: &Config, key: &str, body: &Value) -> Option<Value> {
+fn chat_post(cfg: &Judge, key: &str, body: &Value) -> Option<Value> {
     let url = format!("{}/chat/completions", cfg.endpoint.trim_end_matches('/'));
     let mut req = ureq::post(&url)
         .timeout(Duration::from_millis(cfg.budget_ms))
@@ -591,11 +919,28 @@ fn chat_post(cfg: &Config, key: &str, body: &Value) -> Option<Value> {
 
 /// The command backend: the request on stdin, `{"answers": ...}` on
 /// stdout, inside the budget under `timeout`, as the key command runs.
-fn command_post(cfg: &Config, body: &Value) -> Option<Value> {
+fn command_post(cfg: &Judge, body: &Value) -> Option<Value> {
     use std::io::Write;
     let argv = cfg.command.as_deref()?;
     let (prog, args) = argv.split_first()?;
     let secs = (cfg.budget_ms.div_ceil(1000)).max(1);
+    if cfg.command_mode == CommandMode::Prompt {
+        let out = std::process::Command::new("timeout")
+            .arg(secs.to_string())
+            .arg(prog)
+            .args(args)
+            .arg(prompt_text(body))
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let content = text_json(&String::from_utf8_lossy(&out.stdout))?;
+        let answers = chat_answers(body, &content);
+        return (!answers.as_object()?.is_empty()).then(|| serde_json::json!({"answers": answers}));
+    }
     let mut child = std::process::Command::new("timeout")
         .arg(secs.to_string())
         .arg(prog)
@@ -622,9 +967,9 @@ fn command_post(cfg: &Config, body: &Value) -> Option<Value> {
 /// Ask Jev about one prompt, inside the configured budget.
 #[must_use]
 pub fn judge(prompt: &str, candidates: &[&str]) -> Option<Judgment> {
-    let (cfg, key) = config()?;
+    let (cfg, _) = config()?;
     let body = request(&cfg.model, prompt, candidates);
-    let reply = post(&cfg, &key, body, "hook", Value::Null)?;
+    let reply = post(&cfg, body, "hook", Value::Null)?;
     let mut judged = parse(&reply, candidates.len())?;
     judged.cost = cost_of(&reply, cfg.usd_per_mtok_in);
     judged.bears_at = cfg.bears_at;
@@ -712,10 +1057,10 @@ pub fn parse_ballot(body: &Value, options: &[String]) -> Option<Ballot> {
 /// Ask Jev for a persona's ballot on an issue.
 #[must_use]
 pub fn ballot(persona: &str, issue: &str, brief: &str, options: &[String]) -> Option<Ballot> {
-    let (cfg, key) = config()?;
+    let (cfg, _) = config()?;
     let body = ballot_request(&cfg.model, brief, options);
     let about = serde_json::json!({"issue": issue, "persona": persona, "options": options});
-    let reply = post(&cfg, &key, body, "ballot", about)?;
+    let reply = post(&cfg, body, "ballot", about)?;
     let mut b = parse_ballot(&reply, options)?;
     b.escalate_below = cfg.escalate_below;
     Some(b)
@@ -860,10 +1205,54 @@ pub fn parse_audit(body: &Value) -> Option<Audit> {
 /// Ask Jev about a turn that is about to end.
 #[must_use]
 pub fn audit(state: &str) -> Option<Audit> {
-    let (cfg, key) = config()?;
+    let (cfg, _) = config()?;
     let body = audit_request(&cfg.model, state);
-    let reply = post(&cfg, &key, body, "stop-audit", Value::Null)?;
+    let reply = post(&cfg, body, "stop-audit", Value::Null)?;
     parse_audit(&reply)
+}
+
+/// The probability at or over which a reviewed claim is graded recalled.
+pub const REVIEW_HOLDS_AT: f64 = 0.9;
+/// At or under this a reviewed claim is reported as contradicted, for the
+/// agent to supersede or withdraw; a judge does not lapse it.
+pub const REVIEW_FAILS_AT: f64 = 0.1;
+
+/// The review request: the claim and the newer claims about the same
+/// thing as state, one noul on whether it still holds.
+#[must_use]
+pub fn review_request(model: &str, claim: &str, newer: &[&str]) -> Value {
+    let mut state = format!(
+        "Stored claim under review:\n{claim}\n\nNewer stored claims on the same subject:\n"
+    );
+    if newer.is_empty() {
+        state.push_str("(none)\n");
+    }
+    for (i, t) in newer.iter().enumerate() {
+        state.push_str(&format!("[{i}] {t}\n"));
+    }
+    serde_json::json!({
+        "model": model,
+        "state": state,
+        "questions": {
+            "holds": {
+                "type": "noul",
+                "instructions": "Does the claim under review still hold, given the newer claims? With no newer claim, does it read as a durable fact or rule rather than a passing observation?",
+                "criteria": {
+                    "true": "Nothing newer contradicts or replaces it, and it states something that stays true",
+                    "false": "A newer claim contradicts, corrects or replaces it, or it described a state that has passed"
+                }
+            }
+        }
+    })
+}
+
+/// Ask the review judges whether a claim still holds.
+#[must_use]
+pub fn review(id: &str, claim: &str, newer: &[&str]) -> Option<f64> {
+    let (cfg, _) = config()?;
+    let body = review_request(&cfg.model, claim, newer);
+    let reply = post(&cfg, body, "review", serde_json::json!({"id": id}))?;
+    reply["answers"]["holds"]["noul"].as_f64()
 }
 
 /// Why a stop is held back, from the audit and whether a test ran in the
@@ -972,10 +1361,20 @@ pub fn doctor_row() -> Option<crate::Habitat> {
         Ok(cfg) if !cfg.enabled => ("off".to_string(), true),
         Ok(cfg) => {
             let spent = month_cost().unwrap_or(0.0);
+            let routes: Vec<String> = DECISIONS
+                .iter()
+                .filter(|(d, _)| cfg.route.contains_key(*d))
+                .map(|(d, _)| format!("{d}={}", cfg.route_of(d).join("+")))
+                .collect();
             let head = format!(
-                "{} {}  {} calls, {} cached  ${spent:.4} of ${:.2} this month",
+                "{} {}{}  {} calls, {} cached  ${spent:.4} of ${:.2} this month",
                 cfg.backend.name(),
                 cfg.model,
+                if routes.is_empty() {
+                    String::new()
+                } else {
+                    format!("  {}", routes.join(" "))
+                },
                 month_calls(),
                 month_count("cached"),
                 cfg.monthly_usd
@@ -1182,7 +1581,7 @@ mod tests {
         assert_eq!(cfg.backend, Backend::Command);
         assert!(!cfg.backend.needs_key());
         let body = request("m", "fix the ci", &["alpha claim"]);
-        let reply = command_post(&cfg, &body).unwrap();
+        let reply = command_post(&cfg.default_judge(), &body).unwrap();
         let j = parse(&reply, 1).unwrap();
         assert_eq!(j.bears, vec![0.8]);
         let silent: Config = toml::from_str(
@@ -1190,12 +1589,88 @@ mod tests {
         )
         .unwrap();
         assert!(
-            command_post(&silent, &body).is_none(),
+            command_post(&silent.default_judge(), &body).is_none(),
             "no answer is a refusal"
         );
         let plain: Config = toml::from_str("enabled = true\n").unwrap();
         assert_eq!(plain.backend, Backend::Jev, "the default judge is Jev");
         assert!(plain.backend.needs_key());
+    }
+
+    #[test]
+    fn judges_are_named_and_routed_and_unknown_names_drop_out() {
+        let cfg: Config = toml::from_str(concat!(
+            "enabled = true\nbackend = \"command\"\ncommand = [\"true\"]\n",
+            "[judges.local]\nbackend = \"command\"\ncommand = [\"true\"]\nweight = 2.0\n",
+            "[judges.nokey]\nbackend = \"jev\"\n",
+            "[route]\nballot = [\"default\", \"local\", \"nokey\", \"nobody\"]\n",
+        ))
+        .unwrap();
+        assert_eq!(
+            cfg.route_of("prompt"),
+            ["default"],
+            "an unrouted decision goes to default"
+        );
+        let names: Vec<String> = judges_for(&cfg, "ballot")
+            .into_iter()
+            .map(|j| j.0)
+            .collect();
+        assert_eq!(
+            names,
+            ["default", "local"],
+            "a judge with no key and an unknown name drop out"
+        );
+        assert!((cfg.judge("local").unwrap().weight - 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_pool_averages_log_odds_and_multiplies_distributions() {
+        let body = serde_json::json!({"questions": {
+            "q": {"type": "noul"},
+            "c": {"type": "choice", "criteria": {"A": "a", "B": "b"}},
+            "s": {"type": "score", "criteria": ["0", "1", "2", "3"]},
+            "missing": {"type": "noul"}
+        }});
+        let a = serde_json::json!({"q": {"noul": 0.9}, "c": {"choice": "A", "probabilities": {"A": 0.8, "B": 0.2}}, "s": {"score": 1.0}});
+        let b = serde_json::json!({"q": {"noul": 0.1}, "c": {"choice": "B", "probabilities": {"A": 0.2, "B": 0.8}}, "s": {"score": 3.0}});
+        let even = pool(&body, &[(1.0, a.clone()), (1.0, b.clone())]);
+        assert!(
+            (even["q"]["noul"].as_f64().unwrap() - 0.5).abs() < 1e-9,
+            "opposed odds cancel"
+        );
+        assert!((even["c"]["probabilities"]["A"].as_f64().unwrap() - 0.5).abs() < 1e-9);
+        assert!((even["s"]["score"].as_f64().unwrap() - 2.0).abs() < 1e-9);
+        assert!(
+            even.get("missing").is_none(),
+            "no judge answered it, so the pool leaves it out"
+        );
+        let leaning = pool(&body, &[(3.0, a), (1.0, b)]);
+        assert!(
+            leaning["q"]["noul"].as_f64().unwrap() > 0.8,
+            "weight moves the pool"
+        );
+        assert_eq!(leaning["c"]["choice"], "A");
+        let agree = pool(
+            &body,
+            &[
+                (1.0, serde_json::json!({"q": {"noul": 0.8}})),
+                (1.0, serde_json::json!({"q": {"noul": 0.8}})),
+            ],
+        );
+        assert!((agree["q"]["noul"].as_f64().unwrap() - 0.8).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_harness_judges_from_a_prompt_and_its_printed_json() {
+        let j: Judge = toml::from_str(
+            "backend = \"command\"\ncommand_mode = \"prompt\"\ncommand = [\"sh\", \"-c\", \"echo 'thinking...'; echo '```json'; echo '{\\\"holds\\\": 0.95}'; echo '```'\"]\n",
+        )
+        .unwrap();
+        let body = review_request("m", "packset caps rerank input at 192 tokens", &[]);
+        assert!(prompt_text(&body).contains("Stored claim under review"));
+        let reply = command_post(&j, &body).unwrap();
+        assert!((reply["answers"]["holds"]["noul"].as_f64().unwrap() - 0.95).abs() < 1e-9);
+        assert_eq!(text_json("noise {\"a\": 1} tail").unwrap()["a"], 1);
     }
 
     #[test]

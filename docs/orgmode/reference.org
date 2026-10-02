@@ -139,13 +139,17 @@ stdin is an argv line and answered in plain lines.
 | =cue_at= | 0.5 | probability at which the prompt counts as a correction or a choice |
 | =escalate_below= | 0.8 | a persona ballot under this confidence goes to a subagent |
 | =cache_days= | 7 | days an identical request is answered from the cache; 0 turns it off |
+| =command_mode= | =request= | how the =command= backend is spoken to: =request= (JSON on stdin, answers on stdout) or =prompt= (the questions as the last argument, the first JSON object printed is the answer), for a harness's one-shot mode |
+| =key_env= | unset | environment variable holding the key |
+| =[judges.NAME]= | none | a further judge: =backend=, =command=, =command_mode=, =key_file=, =key_cmd=, =key_env=, =model=, =endpoint=, =budget_ms=, =usd_per_mtok_in=, and =weight= (1.0) in a pool |
+| =[route]= | every decision to =default= | which judges answer each decision: =prompt=, =ballot=, =audit=, =review=, each a list of judge names; =default= is the judge the top-level keys describe |
 
 | Path | Holds |
 |---+---|
 | =$XDG_STATE_HOME/ljos/jev-cost.toml= | the month's calls and spend |
 | =$XDG_STATE_HOME/ljos/jev-log.jsonl= | every Jev answer |
 | =$XDG_CACHE_HOME/ljos/jev= | the answer cache |
-| =$XDG_RUNTIME_DIR/ljos/jev-key= | the key from =key_cmd=, mode 0600 |
+| =$XDG_RUNTIME_DIR/ljos/jev-key= | the default judge's key from =key_cmd=, mode 0600; =jev-key-NAME= for a named judge |
 
 * The learning rules
 
