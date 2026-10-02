@@ -8,7 +8,7 @@ use ljos_cli::{
     format_consolidation, format_doctor, format_findings, format_hits, format_hubs, format_island,
     format_personas, format_playbooks, format_readings, format_remembered, format_seat,
     format_steps, format_write_ack, graded, habit, habits, handover, healthy, hook_call, hook_note,
-    hook_output_ruled, identity_or_seat, island_entities, join, learn_anchors, learn_and_write,
+    identity_or_seat, island_entities, join, learn_anchors, learn_and_write,
     learn_reading, learn_shared, mark_seen, now_utc, on_path, onboard, pack, packset_consolidate,
     packset_forget, packset_hubs, packset_island_as, packset_search_as_of, packset_write_as, panel,
     panel_steps, parse_every, personas_from_pack, playbooks_from_pack, policy_with_memory,
@@ -271,6 +271,11 @@ enum Cmd {
         /// The reason a stopped reader sees.
         #[arg(long)]
         why: String,
+    },
+    /// Record the person's explicit consent for one pending hook request.
+    Approve {
+        /// The request id printed by the hook. Approve only after the person agrees.
+        id: String,
     },
     /// Argv law: the line as it would run, then what the pack knows that bears on it.
     Policy { argv: Vec<String> },
@@ -767,6 +772,9 @@ fn main() -> Result<()> {
             })?;
             println!("{}", serde_json::to_string_pretty(&body)?);
         }
+        Cmd::Approve { id } => {
+            print!("{}", ljos_cli::approval::approve(&id)?);
+        }
         Cmd::Policy { argv } => {
             eprintln!("ljos: {POLICY_TCB}");
             print!("{}", policy_with_memory(&argv)?);
@@ -941,7 +949,7 @@ fn main() -> Result<()> {
                     prompt_hook_stdout(call.shape, call.session.as_deref(), &ctx, &ids)
                 }
             };
-            print!("{}", hook_output_ruled(&call, &context, verdict));
+            print!("{}", ljos_cli::approval::hook_output(&input, &call, &context, verdict));
         }
         Cmd::Consensus { id } => {
             // Rows scoped to a domain apply when the issue is about it; the
