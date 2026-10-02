@@ -6221,8 +6221,21 @@ pub fn push_tier_at(p: &PushCall, cwd: Option<&str>, policy: &PushPolicy) -> Pus
         })
         .unwrap_or_else(|| "origin".into());
     let url = git_out(dir, &["remote", "get-url", &remote]).unwrap_or(remote);
-    let tagged = git_out(dir, &["tag", "--list"]).is_some_and(|t| !t.is_empty());
+    let tagged = git_out(dir, &["tag", "--list"]).is_some_and(|t| t.lines().any(is_version_tag));
     push_tier(&p.args, &push_facts(&url, tagged, policy))
+}
+
+/// Whether a tag names a release: a version, `v1.2` or `0.3.0`, not a
+/// bookmark such as `campaign-sent`.
+#[must_use]
+pub fn is_version_tag(tag: &str) -> bool {
+    let t = tag.trim();
+    let t = t.strip_prefix('v').unwrap_or(t);
+    let parts: Vec<&str> = t.split(['.', '-', '+']).collect();
+    parts.len() >= 2
+        && parts[..2]
+            .iter()
+            .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
 }
 
 /// Whether a cite stands: a deed accession `deedar current` takes, or an
@@ -14848,6 +14861,16 @@ mod tests {
             lines[0]
         );
         assert!(lines[1].contains("about anything"), "{}", lines[1]);
+    }
+
+    #[test]
+    fn only_a_version_tag_is_a_release() {
+        assert!(is_version_tag("v0.19.0"));
+        assert!(is_version_tag("1.2"));
+        assert!(is_version_tag("v2.0.0-rc1"));
+        assert!(!is_version_tag("qmcpack-campaign-2026-08-12-sent"));
+        assert!(!is_version_tag("v1"));
+        assert!(!is_version_tag("latest"));
     }
 
     #[test]
