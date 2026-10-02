@@ -16,17 +16,16 @@ it is on ``PATH`` or ``POLICYD_BIN``.
 The contracts
 =============
 
--  Citation is not a merge. Citing a deed names it; the bytes stay in the
-   deed store.
--  Completing a session node does not close a ticket. ``ljos finish ISSUE --close`` does, when the work is accepted. The claim graph is
-   session state; the tracker decides when work is done.
--  Cards are read-only. The seat writes to the pack; a person writes the
-   cards.
--  The pack is written only by ``remember``, ``prefer``, ``trust``, ``learn``,
-   ``graded``, ``forget`` and an imported handover. Nothing is extracted from a
-   transcript.
--  A tool that fails is a habitat refusing or down, and says which. It is
-   never an empty answer.
+- Citing a deed names it; the bytes stay in deedar.
+- A finish closes the sitting. The ticket closes only with ``ljos finish ISSUE --close``, when the work is accepted. The claim graph is
+  session state; the tracker decides when work is done.
+- Cards are read-only. The seat writes to the pack; a person writes the
+  cards.
+- The pack is written only by ``remember``, ``prefer``, ``trust``, ``learn``,
+  ``graded``, ``forget`` and an imported handover. Nothing is extracted from a
+  transcript.
+- A tool that fails is a habitat refusing or down, and says which. It is
+  never an empty answer.
 
 Memory that grows, is reviewed, decays, and is retracted
 ========================================================
@@ -73,7 +72,12 @@ says so, and the strongest eight fire together: each pair's weight moves a
 tenth of the way to one, a pair with no link gains one, and every other link
 of a fired claim loses two percent. Hebb's rule with Oja's forgetting term
 (doi:10.1007/BF00275687), so weights stay bounded and paths a seat never
-walks fade without being deleted. Activation spreads in proportion to
+walks fade without being deleted. The same eight fire once an hour: several
+seats, or several personas, closing sittings on one issue tighten its
+links one step, not one step each. A persona fires through a lens: its
+weights live beside the shared ones under its name and only it reads
+them, so the facts stay one substrate and each persona's paths over them
+are its own. Activation spreads in proportion to
 weight, so the next cue like this one walks a heavier path. The weights are
 on the atom beside the links and travel in a handover.
 
@@ -93,13 +97,19 @@ Every record in the seat is dated: an atom carries the writer's clock and,
 when it was retired, the window it was live in; a deed carries the time it
 was produced; the tracker's logbook carries the time of each note, state
 change and claim. The seat hands that to the reader as data rather than as
-stamps to subtract. Every recalled memory, in the hook, a brief, ``ljos
-search``, the island in ``ljos sitting``, carries its age in words (``today``,
+stamps to subtract. Every recalled memory, in the hook, a brief, ``ljos search``, the island in ``ljos sitting``, carries its age in words (``today``,
 ``3 weeks ago``), and the hook's lessons run oldest to newest behind the
-preferences, so a later lesson reads as a revision of an earlier one. ``ljos
-timeline ISSUE`` merges the three stores into one dated list with the gap
+preferences, so a later lesson reads as a revision of an earlier one. ``ljos timeline ISSUE`` merges the three stores into one dated list with the gap
 between consecutive lines, and ``ljos search --as-of TIME`` asks the pack as
 it stood at an earlier time.
+
+A habit is the same rule turned into a series. A number the seat keeps
+measuring is written as a reading that supersedes the reading before it
+and carries that reading as what it was, so the pack holds one live value
+a habit, an as-of search reads the value at any earlier time, and the
+cadence is the reading's review clock: a week without a new reading and
+the habit is due like any claim. The numbers in this document are
+readings.
 
 The design came out of measurement. On a public long-conversation
 benchmark the seat's retrieval finds the right session at the top for nine
@@ -204,12 +214,65 @@ doi:10.48550/arXiv.2406.04692; the commercial heavy modes). Two things
 differ. The personas are atoms in the pack, with an anchor the settle
 honours (Friedkin and Johnsen; a captain that decides a split is a persona
 at anchor zero), and the weights are memory that moves with outcomes and
-history, scoped to the topics they were earned on. The ``run_a_panel``
+history, scoped to the topics they were earned on. A panel seats only
+the personas whose domains the issue speaks to, read from its title's
+words and the entities of the island it activates; every persona sits
+when none speaks to it, since a seat that runs every persona on every
+issue is a count with extra steps. The ``run_a_panel``
 prompt orders it: one subagent per persona, one ballot each as itself,
 then the settle, then ``learn`` when the world answers. Chen et al.
 (doi:10.48550/arXiv.2403.02419) show why a count does not improve with
 more voices on hard items; a weighted settle is the alternative this seat
 takes.
+
+Judgment, and where a judge slots in
+====================================
+
+The seat has always made judgments at four points. Each had a local
+answer, and each answer fed a structure that was already there.
+
+=========== ================================================== ================================================================ ===============================================
+point       the judgment                                       the local answer                                                 what consumes it
+=========== ================================================== ================================================================ ===============================================
+prompt hook which claims bear on the prompt                    two scorers agree, a score floor, a shared word, a cross-encoder the injected context
+prompt hook is this a correction, or a choice put to the agent two phrase lists                                                 the ``prefer`` and panel nudges
+panel       which option a persona votes for                   one subagent per persona                                         the settle, forecasts, ``learn``, ``calibrate``
+stop        may the agent stop                                 rules on the held issue                                          one more round, once
+=========== ================================================== ================================================================ ===============================================
+
+Jev, TypeSafe's decision model, answers the same questions with a
+probability and writes no text. So it replaces the answer at each point
+and leaves the structure alone. The same candidates go in, the same
+context and nudges come out, and the local answer stays as the fallback.
+A machine without ``jev.toml`` runs exactly as before.
+
+The ballot shows the fit best. A ballot always carried a confidence, and
+``predict`` always took a share per option, because the settle and the
+surprisingly popular reading need both. A subagent had to be told to guess
+them. Jev returns them: the chosen option's probability is the ballot's
+confidence, and its forecast of the panel is the prediction. ``learn`` then
+scores that confidence as it scores any voter's, so Jev's calibration on
+this seat's questions is a measurement.
+
+Two things are new. Jev's ``confidence`` is a spread over the options, not a
+probability, so it decides only whether to escalate. And personas answered
+by one model are one correlated voter, which is the point Chen et al.
+make about counting more voices. A panel through Jev therefore casts only
+when every seat is sure and all agree, where the outcome could not move.
+A split or unsure panel goes to subagents, and the metered model spends
+only on the contested question. That is a cascade in the sense of
+FrugalGPT (doi:10.48550/arXiv.2305.05176): the cheap judge first, the
+expensive one on what it cannot settle.
+
+The stop audit is the fourth point grown a judge. Whether a test ran is
+read from the commands, in code. Jev answers whether the last message
+claims done and whether the last run is red. A stop waits for another
+round only on 0.9 for the first and 0.1 for the second.
+
+The cuts are fixed from TypeSafe's cookbooks. Every answer goes to
+``jev-log.jsonl`` with its question, and every hook injection already
+reaches the pack as used or not at the session's end. Those pairs are
+what a cut is set from once there are enough of them.
 
 Handover that can be checked
 ============================
@@ -232,6 +295,17 @@ Org headings, one JSON object a line, a content-addressed directory, a
 Cap'n Proto snapshot. Any agent that can run a command or call a Model Context Protocol tool
 can work the seat, and a person can do the same from a shell or an editor.
 A read-only viewer over the habitats is the open work.
+
+The seat does not know the runners. It knows one thing every runner
+does: it connects, and says its name. ``ljos-mcp`` takes that name at
+initialize as the seat, and leaves a record under the runtime directory
+keyed by the runner's process; ``ljos`` in a shell walks its own process
+tree to that record, or to the first ancestor that is not a shell, and so
+names the same seat. A runner's tools and its verbs are one seat with
+nothing set, and a new runner needs no table anywhere. Memory, ballots
+and trust accrue to the seat across conversations; claims are held by
+the seat tagged with the conversation's process, so two conversations of
+one runner hold two tickets. ``LJOS_SEAT`` is the override, not the setup.
 
 The agent is told how, in one text. The protocol ``ljos protocol`` prints is
 the same text ``ljos onboard`` installs as a skill and the server serves at

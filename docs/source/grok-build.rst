@@ -37,11 +37,11 @@ The frozen file is `crates/ljos-cli/assets/grok/ljos.json <../../crates/ljos-cli
 Its ``{ljos}`` is filled in at onboard. ``PreToolUse`` gets 10 seconds, the
 TCB check's budget; the others get Grok's default 5.
 
-Grok's stdin is camelCase (``hookEventName``, ``sessionId``, ``toolInput``),
-and ``ljos hook`` reads it as the snake_case fields. Grok blocks on a
-top-level ``decision`` and has no ``ask``, so a deny carries
-``"decision":"deny"`` beside ``hookSpecificOutput``, and an ``ask`` rule is
-written as a deny that tells the agent to ask the person.
+Grok's stdin is camelCase (``hookEventName``, ``sessionId``, ``toolInput``), and
+``ljos hook`` reads it as the snake\ :sub:`case` fields. Grok blocks on a top-level
+``decision`` and has no ``ask``, so a deny carries ``"decision":"deny"`` beside
+``hookSpecificOutput``, and an ``ask`` rule is written as a deny that tells the
+agent to ask the person.
 
 Smoke
 =====

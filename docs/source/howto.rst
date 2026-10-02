@@ -1,11 +1,40 @@
 Wire the seat into an agent runner
 ==================================
 
-Describe the runners on the machine once, in
-``~/.config/ljos/harnesses.toml``. A runner registers MCP servers either
-through a command of its own or through a config file it reads; the file
-holds one table per runner, in one of those two shapes, plus the directory
-it loads skills from. ``ljos onboard --example`` prints the shape:
+One entry, for any runner that speaks MCP over stdio:
+
+.. code:: console
+
+   $ ljos onboard
+   {"mcpServers": {"ljos": {"type": "stdio", "command": "/home/you/.cargo/bin/ljos-mcp", "args": [], "env": {}}}}
+
+Paste it where the runner keeps its MCP servers. The ``env`` is empty on
+purpose. The server names the seat after the client that connects, so a
+runner that calls itself ``acme-cli`` is the seat ``acme-cli`` and a
+runner that calls itself ``brio`` is ``brio``, with nothing set per runner.
+A shell the runner opens finds the same seat: ``ljos`` walks its own
+process tree to the record the server left for that runner, or, when the
+runner has no MCP, to the first ancestor that is not a shell. Each
+conversation holds its claims as the seat tagged with its process, so two
+conversations of one runner hold two tickets.
+
+.. code:: console
+
+   $ ljos seat
+   seat    acme-cli
+   holder  acme-cli-39u
+   source  the server the runner opened, process 4242
+
+The protocol goes where the agent reads its instructions: ``ljos protocol``
+prints it, the server serves the same text at ``ljos://protocol`` and names
+it in its instructions, so a runner that loads neither skills nor
+resources still reads it first. Each tool description opens with when to
+call it.
+
+A runner that registers servers by a command of its own, or reads them
+from a config file, can be described once in
+``~/.config/ljos/harnesses.toml`` and onboarded in one verb.
+``ljos onboard --example`` prints the shape:
 
 .. code:: toml
 
@@ -22,30 +51,34 @@ it loads skills from. ``ljos onboard --example`` prints the shape:
    snippet = "\n[mcp_servers.ljos]\ncommand = \"{server}\"\nargs = []\n"
    skills = "~/.other/skills"
 
-Then one verb per runner:
-
 .. code:: console
 
    $ ljos onboard --harness runner-with-a-command
    ok  runner-with-a-command mcp   ran runner mcp add -s user ljos -- /home/you/.cargo/bin/ljos-mcp
    ok  skill   wrote /home/you/.runner/skills/ljos/SKILL.md
+
+``--dry-run`` reports what would be written.
+
+The example carries the runners this seat has carried through one piece
+of work, each in the shape it takes the server: a runner with an ``mcp add`` of its own by that command; ``grok`` and a runner with a TOML config
+by a table appended to it; ``opencode`` and ``omp`` by a JSON pointer set in
+their MCP file; ``hermes`` by its ``mcp add`` with the tool question
+answered. Copy the tables for the runners on the machine into
+``harnesses.toml``, then one verb each:
+
+.. code:: console
+
+   $ for h in opencode hermes omp grok; do ljos onboard --harness $h; done
    $ ljos doctor | grep runner
-   ok  runner mcp  runner-with-a-command: ljos registered
-   ok  runner skill    runner-with-a-command: /home/you/.runner/skills/ljos/SKILL.md
+   ok  runner mcp  opencode: ljos registered
+   ok  runner skill    opencode: /home/you/.config/opencode/skills/ljos/SKILL.md
+   ok  runner mcp  hermes: ljos registered
+   ok  runner skill    hermes: /home/you/.hermes/skills/ljos/SKILL.md
+   ...
 
-``--dry-run`` reports what would be written. For a runner not in the file,
-``ljos onboard --harness json`` prints the server entry to paste:
-
-.. code:: json
-
-   {"mcpServers": {"ljos": {"type": "stdio", "command": "/home/you/.cargo/bin/ljos-mcp", "args": [], "env": {}}}}
-
-The skill is the protocol ``ljos protocol`` prints, under a front matter the
-runner reads. The server serves the same text at ``ljos://protocol`` and
-names it in its instructions, so a runner that loads neither skills nor
-resources still reads it first. Twenty-three tools, fourteen of them
-writers, two prompts (``start_a_sitting``, ``check_a_handover``), three
-read-only resources. Each tool description opens with when to call it.
+A runner with a hooks file (``hooks`` in its table) takes the memory hook
+too; for the others the skill and the ``ljos://protocol`` resource carry
+what the seat knows, and the sitting's island brings the memories in.
 
 Inject memory at the point of action
 ====================================
@@ -80,6 +113,40 @@ calls and one prompt. On a tool call the hook applies the TCB
    $ echo '{"hook_event_name":"PreToolUse","tool_input":{"command":"git push --force"}}' | ljos hook
    {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"git-force-push (seat rule `ljos-policyd`)"}}
 
+An ``ask`` rule uses the caller's approval UI when that UI is supported.
+Otherwise the hook stops the command and prints a request id with
+``ljos approve REQUEST_ID``. Once the person has explicitly approved that
+command, run the printed command to record consent, then retry the
+original tool call. Consent already given for that request counts; there
+is no need to ask the same question again.
+
+.. code:: console
+
+   $ ljos approve REQUEST_ID
+   Approved once: git push origin main
+   Directory: /work/project
+   Conversation: example-session
+   Retry the original command.
+
+``REQUEST_ID`` is the 32-character hexadecimal id printed by the hook, not
+an arbitrary command or a wildcard. The receipt names the exact command
+and the directory and conversation reported by the hook. A tool-level
+working directory takes precedence when the caller includes it. A caller
+that supplies only its conversation directory does not expose shell
+working-directory overrides to this check.
+
+The grant lasts for one matching attempt and expires fifteen minutes
+after the request. A changed command, reported directory, conversation,
+tool, or rule needs its own approval. Retrying an expired or consumed id
+is refused. Deny rules and the policy binary still run on every attempt
+and take precedence over consent. Native execution permissions still
+apply after the hook accepts the retry.
+
+Requests live in the private login runtime directory, under
+``ljos/approvals/requests.json``. They are temporary consent records, not
+standing rules or memories. The file is locked while a grant is recorded
+or consumed; unavailable or invalid state keeps the command blocked.
+
 **Grok Build.** ``ljos onboard --harness grok`` writes
 ``~/.grok/hooks/ljos.json``. The hook searches on the prompt, holds the
 text, and emits it on ``PostToolUse``. The page :doc:`Grok Build <grok-build>`
@@ -96,6 +163,69 @@ policy daemon does the same with the argv:
    $ ljos policy cargo test --release
    cargo test --release
    What this seat already knows that bears on this ...
+
+Let Jev judge the prompt
+========================
+
+The prompt hook makes three judgments locally. A cross-encoder picks
+the claims that bear on the prompt. Two phrase lists spot a correction
+and a choice put to the agent. Jev, TypeSafe's decision model, answers
+all three in one call. It stays off unless the machine turns it on,
+because the call sends the prompt and up to ten candidate claims off
+the machine.
+
+Keep the key in ``pass`` and write the setting:
+
+.. code:: console
+
+   $ pass insert api/typesafe/jev
+   $ cat > ~/.config/ljos/jev.toml <<'TOML'
+   enabled = true
+   key_cmd = ["pass", "show", "api/typesafe/jev"]
+   TOML
+   $ ljos doctor | grep jev
+   ok  jev on  jev-1.13.0  0 calls  $0.0000 of $4.00 this month
+
+The hook runs the key command once per login, with no terminal and
+three seconds to answer, and keeps the key in
+``$XDG_RUNTIME_DIR/ljos/jev-key`` (mode 0600). ``key_file`` names a file
+instead.
+
+The call goes out only where it can change the answer:
+
+================== ======= ======================================
+gate               default skipped prompt
+================== ======= ======================================
+``min_words``      4       "yes", "keep going"
+``min_candidates`` 2       fewer claims than a choice needs
+``monthly_usd``    4.0     any, once the month's spend reaches it
+================== ======= ======================================
+
+A skipped prompt gets the lexical search and the phrase lists. With Jev
+on, the hook never loads the cross-encoder, so its memory stays free.
+A prompt past 2,000 characters goes out cut to that length.
+
+A prompt with ten candidates takes about 900 input tokens. At $0.042 per
+million input tokens, with output free, a prompt costs $0.00004. The
+hook records each call's tokens at ``usd_per_mtok_in``, or the API's own
+figure when OpenRouter sends one, in ``$XDG_STATE_HOME/ljos/jev-cost.toml``.
+For OpenRouter, set ``endpoint = "https://openrouter.ai/api/alpha/decisions"``
+and ``model = "typesafe/jev-1.13"``.
+
+Jev answers each question with a probability. ``bears_at`` (0.5) is the
+one at which a claim goes in, and ``cue_at`` (0.5) the one at which a
+prompt counts as a correction or a choice. Raise ``bears_at`` to 0.7 when
+off-topic claims come through.
+
+Jev keeps no cache of its own, so ljos keeps one. An identical request
+within ``cache_days`` (7) is answered from ``$XDG_CACHE_HOME/ljos/jev`` at no
+cost, and the doctor row counts those answers as cached. A panel asked
+twice, a retried ballot and a repeated prompt with the same claims all
+hit it. ``cache_days = 0`` turns it off.
+
+The hook falls back to its local path on any of these: no file,
+``enabled = false``, no key, an error, or no answer inside ``budget_ms``
+(2000).
 
 Give an agent the protocol without a runner
 ===========================================
@@ -123,6 +253,79 @@ claim search found itself, the rest were reached along the pack's links;
 the age column says when each was written. Add ``--fire`` when you go on to
 use the island: the strongest eight fire together and their links gain
 weight.
+
+Bump a recipe with eb-stack, and keep what the campaign taught
+==============================================================
+
+One sitting on the ticket, one island per recipe before it is touched:
+
+.. code:: bash
+
+   ljos sitting ebstack-319z
+   ljos island "eOn 2.17.10 foss 2026.1"
+
+Then the ladder, each rung its own artifact: ``eb-stack recipe check``,
+``eb-stack package bump`` (the lock under ``out/locks`` is ``resolves``),
+``eb-stack recipe lint``, ``eb-stack target doctor``, ``eb-stack campaign run`` and ``campaign status`` (``builds``, ``binary-verified``). Over MCP the
+same verbs are ``eb_recipe_check``, ``eb_package_bump``, ``eb_recipe_lint``,
+``eb_target_doctor``, ``eb_campaign_run``, ``eb_campaign_status``, beside
+``ljos_sitting``, ``ljos_island``, ``ljos_remember`` and ``ljos_finish``.
+
+For a whole generation, put the bundle on the tracker before anybody
+builds, and let the graph hand out the work:
+
+.. code:: bash
+
+   ljos bump-plan out --project ebstack --parent ebstack-319z --dry-run
+   ljos bump-plan out --project ebstack --parent ebstack-319z
+   vissue ready -p ebstack
+
+One child issue per module the lock builds, blocked by the modules built
+before it; ``ready`` is the frontier a seat can sit on, and ``ljos sitting``
+refuses a module whose blockers are still open. The ids are a hash of
+the module and the generation, so running it again after the bundle
+changed adds the new modules and holds the rest.
+
+When the campaign ends, its typed findings are the lessons:
+
+.. code:: bash
+
+   ljos findings out/campaign.json
+   ljos findings out/campaign.json --remember --issue ebstack-319z
+
+The first prints one line per finding. The second writes one lesson per
+finding a person or a seat resolved, under the recipe's name, the
+package and the failure class, and cites the state file on the issue as
+a deed. A finding a later attempt merely got past is skipped; ``--all``
+takes it too. The next bump of that recipe recalls the lesson from its
+island:
+
+::
+
+   GCCcore-15.2.0 on terra: compile failed in the build step with fatal error: linux/scc,h. Fix: applied the GCC 14 libsanitizer kernel headers patch in GCCcore-15.2.0.
+
+Keep a number
+=============
+
+A number the seat measures again and again, a benchmark score, a hook
+latency, a count of open tickets, is a habit. A reading is one verb:
+
+.. code:: console
+
+   $ ljos habit mab-cr-all 0.535 --unit acc --every 7d --source 11750
+   7b1c... habit   due 2026-09-26T10:00:00.000Z    habit mab-cr-all stands at 0.535 acc (11750).
+   $ ljos habit mab-cr-all 0.579 --unit acc --every 7d --source 11793
+   9e0a... habit   due 2026-10-03T09:12:41.000Z    habit mab-cr-all stands at 0.579 acc (11793).
+   was 0.535 acc (8 days ago), now closed
+   $ ljos habit
+   mab-cr-all  0.579 acc   +0.044 since 0.535 (8 days ago) today   next reading in 7 days  11793
+
+The second reading supersedes the first, so the pack holds one live value
+a habit and ``ljos search mab-cr-all --as-of 2026-09-15`` still answers
+what it stood at then. The cadence is the reading's review clock: when a
+week passes with no new reading, ``ljos due`` lists the habit and the hook
+says so once a session. The sheet a paper's table is written from is the
+pack, and it is dated.
 
 Ask when
 ========
@@ -159,7 +362,7 @@ Start a sitting, and end one
    $ ljos sitting proj-1a2b
    == doctor
    ok  vissue  ...
-   ok  seat    alice (from LJOS_SEAT)
+   ok  seat    alice, holding as alice (from LJOS_SEAT)
    == cards
    == due
    unreviewed  conclusion  3f9c... The lexical default is BM25+.
@@ -183,9 +386,9 @@ One verb, in the protocol's order; it stops at the first store that does
 not answer and claims nothing. ``--playbook NAME`` copies a recipe
 (``sit``, ``arena``, ``land``, ``company-panel``, ``overnight``) into the
 playbook section before recall; absent a name, a closed-set token in the
-title else ``sit``. The name is a tracker ``playbook:`` note until finish
-or release. ``ljos panel`` refuses until one is bound. The ``start_a_sitting``
-prompt gives the same order to a runner that prefers single tools. A claim
+title else ``sit``. The name is a tracker ``playbook:`` note until finish or
+release. ``ljos panel`` refuses until one is bound. The ``start_a_sitting`` prompt
+gives the same order to a runner that prefers single tools. A claim
 refused as busy names the issue you still hold; ``ljos complete`` finishes it
 and ``ljos release`` hands it back.
 
@@ -211,8 +414,78 @@ Vote with personas
 
 Each persona is one atom in the pack; its ballots carry its name. The
 settle takes its anchor: the reviewer at 0.2 barely moves off ``hold``, the
-reader at 0.8 is nearly a plain voter. A trust row scoped with ``--about
-docs`` weighs only on issues whose title says ``docs``.
+reader at 0.8 is nearly a plain voter. A trust row scoped with ``--about docs`` weighs only on issues whose title says ``docs``, and ``--about`` is
+also what seats a persona: ``ljos panel ISSUE`` and the ``run_a_panel``
+prompt brief only the personas whose domains the issue's title or its
+island names, and every persona when none does.
+
+A persona keeps its own tree over the seat's facts. ``ljos remember --as NAME`` writes into the set ``persona-NAME``, where the duplicate and
+replacement rules run among its own conclusions and never against the
+seat's or another persona's; the seat still reads every set. ``ljos island CUE --as NAME`` walks the pack through that persona's link
+weights, and with ``--fire`` tightens the paths it walked under its own
+name (``link_weights_by``), leaving the seat's weights as they were. Two
+personas that read the same island differently end up with different
+islands over the same claims.
+
+Cast persona ballots through Jev
+================================
+
+With Jev on, a persona's ballot can come from Jev instead of a subagent.
+The issue needs an ``Options: A, B`` line.
+
+.. code:: console
+
+   $ ljos vote ljos-abcd --as security-reviewer --jev
+   security-reviewer: Jev cast age at confidence 0.97
+   $ ljos panel ljos-abcd --jev
+   3 personas on ljos-abcd through Jev: all sure, all age; cast
+
+Jev reads the persona's brief and answers two choice questions: the
+persona's vote, and what the rest of the panel will pick. A cast ballot
+records the chosen option's probability as its confidence and the
+forecast as its prediction, so the settle and the surprisingly popular
+reading get both. A note on the issue says the ballot came from Jev.
+
+Jev's confidence measures how spread out its probabilities are. Under
+``escalate_below`` (0.8), ``vote --jev`` does not cast. It notes Jev's lean
+and names the brief to start a subagent from.
+
+A panel casts only when every seated persona is sure and all agree.
+Personas answered by one model are correlated voters, so their agreement
+settles only a question it could not change. A split or unsure panel
+casts nothing and writes a brief per seat for subagents. The metered
+model then spends only on the contested questions. A ballot costs about
+2,000 input tokens, or $0.00008.
+
+Every Jev answer goes to ``$XDG_STATE_HOME/ljos/jev-log.jsonl``. ``ljos learn`` scores a cast ballot's confidence as it does any voter's.
+
+Hold a done claim beside a red test
+===================================
+
+With Jev on, the ``Stop`` and ``SubagentStop`` hooks audit the turn once
+before the agent stops. The state holds four parts, bounded to a few
+thousand tokens:
+
+- the person's last request
+- the shell commands since it
+- the latest test output, or the last output when no test ran
+- the final message
+
+Jev answers three questions about it:
+
+=================== ==========================================================================
+question            holds the stop at
+=================== ==========================================================================
+``claims_complete`` 0.9 or above, with ``tests_green`` 0.1 or under and a test run in the turn
+``tests_green``     (with the above)
+``deferral``        0.9 or above
+=================== ==========================================================================
+
+Whether a test ran is decided in code, from the command line. A held
+agent gets the reason and one more round; its second attempt to stop is
+never audited, so it cannot loop. A final message under 80 characters is
+not sent. The cuts sit in ``jev.rs`` beside the questions. A stop costs
+about 3,000 input tokens, or $0.00013.
 
 Move the trust rows without an outcome
 ======================================
@@ -247,13 +520,12 @@ Sign what you hand over
    $ ljos doctor | grep 'host key'
    ok  host key    /home/you/.config/deedar/host.key (32-byte seed)
 
-``handover`` then signs the manifest and the log head. Two seats share
-one ticket by this walk, in sequence: A sits and hands over, B imports
-and sits after A releases, both vote, consensus, finish closes.
-``scripts/smoke.sh`` runs it on scratch stores; ``scripts/herd.sh`` is
-the concurrent contention check. A receiver adds
+``handover`` then signs the manifest and the log head. A receiver adds
 ``signer = ed25519:<hex>`` to their deed store's ``layout`` and ``receive``
-reports ``(accepted)``.
+reports ``(accepted)``. Two seats share one ticket by this walk, in
+sequence: A sits and hands over, B imports and sits after A releases,
+both vote, consensus, finish closes. ``scripts/smoke.sh`` runs it on
+scratch stores; ``scripts/herd.sh`` is the concurrent contention check.
 
 Receive from the same sender again
 ==================================
@@ -333,17 +605,13 @@ Check the seat
    ok  pack  http://127.0.0.1:8761 workspace git:github.com/leidarljos/ljos
    ok  host key  ~/.config/deedar/host.key (32-byte seed)
    ok  deed store  size=34 root=3d8e015509923724097e9f33d3a044fe0764f17bd5387769530ed5bfb6ada
-   ok  tracker  vissue 0.16.2 root=/home/me/vault prefix=Software from VISSUE_ROOT=/home/me/vault
+   ok  tracker  vissue 0.10.0
    ok  claim graph  a4a8fa1b8f05d259877be54da99f06bc  claimed  task  69f91712  gen=2  ljos-a6
 
 Exit 1 when the tracker, the deed store, or the pack does not answer. The
-tracker row names the root vissue resolved and where it came from, and fails
-when that root is relative, missing, or holds no prefix directory: a ticket
-filed there is invisible to every other seat. It also names how many commits
-the checkout holds that origin does not, and fails when that count sits
-through the push wait; a leftover refused-push log is named on the row. It
-also fails when another remote of the tracker holds a different head of the
-branch, as of the last fetch: two seats pushing to two remotes each read
-only their own writes. A sitting's own tracker push goes to every remote
-that carries the branch. A missing claim graph is reported and is not a failure: the first claim
-creates it.
+tracker row names how many commits origin lacks, and fails when that count
+sits through the push wait. It also fails when another remote of the
+tracker holds a different head of the branch, as of the last fetch: two
+seats pushing to two remotes each read only their own writes. A sitting's own tracker push goes to
+every remote that carries the branch. A missing
+claim graph is reported and is not a failure: the first claim creates it.
