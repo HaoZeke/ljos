@@ -35,6 +35,10 @@ use serde::{Deserialize, Serialize};
 const SCHEME: &str = "ljos";
 /// Where the sitting protocol is read from.
 const PROTOCOL_URI: &str = "ljos://protocol";
+/// How long a resource listing or read stays fresh. Cards are rewritten by the
+/// human at any time, so nothing is cached; MCP protocol 2026-07-28 requires
+/// the caching fields on every cacheable result.
+const RESOURCE_TTL_MS: u64 = 0;
 
 #[derive(Clone)]
 pub struct LjosServer {
@@ -2214,7 +2218,9 @@ impl ServerHandler for LjosServer {
                     resource
                 }))
                 .collect(),
-        ))
+        )
+        .with_ttl_ms(RESOURCE_TTL_MS)
+        .with_cache_scope(CacheScope::Private))
     }
 
     async fn read_resource(
@@ -2224,7 +2230,10 @@ impl ServerHandler for LjosServer {
     ) -> Result<ReadResourceResponse, McpError> {
         let uri = request.uri.clone();
         if uri == PROTOCOL_URI {
-            return Ok(ReadResourceResult::new(vec![ResourceContents::text(PROTOCOL, uri)]).into());
+            return Ok(ReadResourceResult::new(vec![ResourceContents::text(PROTOCOL, uri)])
+                .with_ttl_ms(RESOURCE_TTL_MS)
+                .with_cache_scope(CacheScope::Private)
+                .into());
         }
         let name = card_named(&uri).ok_or_else(|| {
             McpError::resource_not_found(
@@ -2238,7 +2247,10 @@ impl ServerHandler for LjosServer {
         let path = self.cards_dir.join(name);
         // A missing card is an empty card; nothing is created.
         let text = std::fs::read_to_string(&path).unwrap_or_default();
-        Ok(ReadResourceResult::new(vec![ResourceContents::text(text, uri)]).into())
+        Ok(ReadResourceResult::new(vec![ResourceContents::text(text, uri)])
+            .with_ttl_ms(RESOURCE_TTL_MS)
+            .with_cache_scope(CacheScope::Private)
+            .into())
     }
 }
 
