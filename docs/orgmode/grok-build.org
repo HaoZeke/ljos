@@ -37,10 +37,11 @@ Its ={ljos}= is filled in at onboard. =PreToolUse= gets 10 seconds, the
 TCB check's budget; the others get Grok's default 5.
 
 Grok's stdin is camelCase (=hookEventName=, =sessionId=, =toolInput=), and
-=ljos hook= reads it as the snake_case fields. Grok blocks on a top-level
-=decision= and has no =ask=, so a deny carries ="decision":"deny"= beside
-=hookSpecificOutput=, and an =ask= rule is written as a deny that tells the
-agent to ask the person.
+=ljos hook= reads it as the snake_case fields. A deny blocks on a top-level
+=decision= of =deny= beside =hookSpecificOutput=. An ask rule is the same
+pair with =ask=: Grok shows that as the in-chat permission prompt. A runner
+that cannot ask (stdin carrying =turn_id=) still gets the ask rewritten to
+a deny.
 
 * Smoke
 

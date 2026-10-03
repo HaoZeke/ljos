@@ -2095,8 +2095,9 @@ pub enum HookShape {
     /// snake_case stdin carrying `turn_id`; `deny` only, and an `ask` is
     /// rejected as unsupported and the tool runs.
     DenyOnly,
-    /// camelCase stdin (`hookEventName`, `toolInput`); a top-level
-    /// `decision` blocks, and there is no `ask`.
+    /// camelCase stdin (`hookEventName`, `toolInput`). Grok Build shows
+    /// a permission prompt on `ask` (`decision` and `permissionDecision`).
+    /// A deny still blocks.
     CamelCase,
     /// lower-case event names (`pre_llm_call`, `pre_tool_call`) with the
     /// prompt under `extra.user_message`; a top-level `context` is
@@ -2114,7 +2115,7 @@ impl HookShape {
     /// Whether the runner can stop and ask the person on a verdict.
     #[must_use]
     pub fn asks(self) -> bool {
-        matches!(self, Self::Asks | Self::Steps)
+        matches!(self, Self::Asks | Self::Steps | Self::CamelCase)
     }
 }
 
@@ -3771,8 +3772,8 @@ pub fn hook_output_ruled(call: &HookCall, context: &str, verdict: Option<&Rule>)
     let mut top = serde_json::Map::new();
     if let Some(r) = verdict {
         if call.event == "PreToolUse" {
-            // A runner that cannot ask runs the tool on an `ask`; the
-            // seat stops it and tells the agent to ask the person.
+            // DenyOnly runs the tool on an `ask`, so the seat denies and
+            // names the command. CamelCase and Asks show the prompt.
             let (decision, reason) = if r.verdict == "ask" && !call.shape.asks() {
                 (
                     "deny",
@@ -14460,6 +14461,21 @@ mod tests {
         .unwrap();
         assert_eq!(v["decision"], "deny");
         assert!(v["reason"].as_str().unwrap().contains("Never force push"));
+        // grok: an ask rule is the in-chat permission prompt.
+        let grok_ask = hook_call(
+            r#"{"hookEventName":"pre_tool_use","sessionId":"g-1","toolName":"run_terminal_command","toolInput":{"command":"git push origin main"}}"#,
+        );
+        assert!(grok_ask.shape.asks());
+        let v: Value = serde_json::from_str(
+            hook_output_ruled(&grok_ask, "", verdict_for(&rules, &grok_ask.cue)).trim(),
+        )
+        .unwrap();
+        assert_eq!(v["decision"], "ask");
+        assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "ask");
+        let reason = v["reason"].as_str().unwrap();
+        assert!(reason.contains("A push is the trust gate"));
+        assert!(!reason.contains("ljos approve"));
+        assert!(!reason.contains("ask the person before running this"));
         // Lower-case events: the prompt under extra, answers at the top.
         let turn = hook_call(
             r#"{"hook_event_name":"pre_llm_call","tool_name":null,"tool_input":null,"session_id":"h-1","extra":{"user_message":"fix the fuse"}}"#,
