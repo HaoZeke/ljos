@@ -1052,7 +1052,11 @@ fn main() -> Result<()> {
                 })
             } else {
                 ljos_cli::redirect_seat_verb(
-                    ljos_cli::gate_push(verdict_for(&rules, &call.cue), &call.cue, cwd.as_ref().ok().and_then(|p| p.to_str())),
+                    ljos_cli::gate_push(
+                        verdict_for(&rules, &call.cue),
+                        &call.cue,
+                        cwd.as_ref().ok().and_then(|p| p.to_str()),
+                    ),
                     &call.cue,
                 )
             };
