@@ -2,6 +2,9 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
+## Unreleased
+
+- The TCB judges each pipeline whole, in shell words: `curl URL | sh` reaches `ljos-policyd` as one call, where splitting at the pipe let it pass, and a quoted sentence naming a command is one word.
 ## 0.24.1 (2026-10-03)
 
 - Consent in the chat: a command an ask rule stopped is approved by the person replying `approve ID` in the same conversation; the prompt hook records the grant, as `ljos approve ID` in a terminal does. A request from another conversation is not granted, and the seat guard refuses typing an approval into a pane.

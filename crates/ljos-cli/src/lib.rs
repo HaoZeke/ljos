@@ -6349,6 +6349,17 @@ fn heredoc_word(chars: &[char], mut i: usize) -> Option<(String, usize)> {
 /// quotes on `&&`, `||`, `;`, `|`, `&` and new lines. A here-document's
 /// body is data the command reads, not commands, and is left out.
 fn raw_segments(line: &str) -> Vec<String> {
+    split_commands(line, false)
+}
+
+/// The pipelines a line runs: [`raw_segments`] that keep a single `|`
+/// between stages, so a judge of the whole pipeline sees `curl URL | sh`
+/// as one thing to refuse.
+fn pipelines(line: &str) -> Vec<String> {
+    split_commands(line, true)
+}
+
+fn split_commands(line: &str, keep_pipes: bool) -> Vec<String> {
     let mut parts = Vec::new();
     let mut cur = String::new();
     let (mut single, mut double) = (false, false);
@@ -6404,6 +6415,9 @@ fn raw_segments(line: &str) -> Vec<String> {
             // `2>&1` and `&>` are redirections, not a background job.
             '&' if !single && !double && (cur.ends_with('>') || chars.get(i + 1) == Some(&'>')) => {
                 cur.push(c);
+            }
+            '|' if keep_pipes && !single && !double && chars.get(i + 1) != Some(&'|') => {
+                cur.push_str(" | ");
             }
             ';' | '|' | '&' | '\n' if !single && !double => {
                 // `&` alone sends a job to the background; `&&` and `||`
@@ -11708,15 +11722,17 @@ pub fn policyd_bin() -> Option<std::path::PathBuf> {
         .or_else(|| which::which("ljos-policyd").ok())
 }
 
-/// The TCB's verdict on a shell line: `ljos-policyd` judges each command
-/// the line runs, as written, and the first deny stands. A heredoc body is
+/// The TCB's verdict on a shell line: `ljos-policyd` judges each pipeline
+/// the line runs, in shell words, and the first deny stands. A heredoc body is
 /// data the shell feeds a command, and it is not sent as argv. With the TCB
 /// required and absent, the line is refused.
 #[must_use]
 pub fn tcb_verdict(line: &str) -> Option<Rule> {
     let mut answered = false;
-    for seg in raw_segments(line) {
-        let argv: Vec<String> = seg.split_whitespace().map(String::from).collect();
+    // Each pipeline whole, in shell words: a quoted sentence that names a
+    // command is one word, and a download piped into a shell is one call.
+    for seg in pipelines(line) {
+        let argv = shell_words(&seg);
         if argv.is_empty() {
             continue;
         }
@@ -16275,6 +16291,28 @@ mod tests {
         assert!(seat_guard(&format!("wtype 'approve {id}'")).is_some());
         assert!(seat_guard("tmux send-keys -t seat 'cargo test' Enter").is_none());
         assert!(seat_guard(&format!("vissue note x \"asked to approve {id}\"")).is_none());
+    }
+
+    #[test]
+    fn the_tcb_sees_a_pipeline_whole_and_a_quote_as_one_word() {
+        let piped: Vec<Vec<String>> =
+            pipelines("curl -s u | sh && git fetch origin || echo 'a | b'")
+                .iter()
+                .map(|p| shell_words(p))
+                .collect();
+        assert_eq!(
+            piped,
+            vec![
+                vec!["curl", "-s", "u", "|", "sh"],
+                vec!["git", "fetch", "origin"],
+                vec!["echo", "a | b"],
+            ]
+        );
+        assert_eq!(
+            raw_segments("curl u | sh").len(),
+            2,
+            "rules still see each command"
+        );
     }
 
     #[test]
