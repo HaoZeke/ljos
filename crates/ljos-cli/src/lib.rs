@@ -11352,7 +11352,9 @@ impl Drop for CommitLock {
 /// never committed were how tickets came back open. Only that file is
 /// committed (`--only`), so another seat's staged work is left alone. Never
 /// an error: the verb already happened, and the line says what did not.
-/// `LJOS_TRACKER_GIT=off` skips it; `=commit` commits without pushing.
+/// An ignored file is named with its ignore rule. It is not a clean tree
+/// and it is not force-added. `LJOS_TRACKER_GIT=off` skips it; `=commit`
+/// commits without pushing.
 pub fn persist_tracker(issue: &str, verb: &str) -> String {
     let mode = std::env::var("LJOS_TRACKER_GIT").unwrap_or_default();
     if matches!(mode.as_str(), "off" | "0" | "false") {
@@ -11393,7 +11395,19 @@ pub fn persist_tracker_file(path: &Path, issue: &str, verb: &str) -> String {
     }
     match git(&["status", "--porcelain", "--", &file]) {
         Ok(o) if o.status.success() && o.stdout.is_empty() => {
-            return "tracker git: nothing to commit\n".into();
+            // An ignored file has an empty status, the same shape as a
+            // clean tracked file. The ignore rule is what keeps the write
+            // on this machine.
+            match git(&["check-ignore", "-v", "--", &file]) {
+                Ok(ignored) if ignored.status.success() => {
+                    return format!(
+                        "tracker git: {} is ignored ({}), so the write stays in this worktree\n",
+                        path.display(),
+                        first_line(&ignored.stdout)
+                    );
+                }
+                _ => return "tracker git: nothing to commit\n".into(),
+            }
         }
         Ok(o) if o.status.success() => {}
         Ok(o) => return format!("tracker git: {}\n", first_line(&o.stderr)),
@@ -12897,6 +12911,53 @@ mod tests {
         std::fs::write(&issues, heading.replace("TODO", "DONE")).unwrap();
         std::env::set_var("LJOS_TRACKER_GIT", "off");
         assert!(super::persist_tracker("probe-a1b2", "finished").contains("off"));
+        for var in ["VISSUE_ROOT", "VISSUE_NO_ROUTE", "LJOS_TRACKER_GIT"] {
+            std::env::remove_var(var);
+        }
+    }
+
+    /// An ignored issues file is not a clean tree. Status is empty for both,
+    /// and the ignore rule is the line that tells them apart.
+    #[test]
+    fn an_ignored_tracker_file_is_not_nothing_to_commit() {
+        let _env = env_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let run = |args: &[&str]| {
+            let o = std::process::Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                o.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+            String::from_utf8_lossy(&o.stdout).to_string()
+        };
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "seat@example.invalid"]);
+        run(&["config", "user.name", "seat"]);
+        run(&["config", "core.hooksPath", "/dev/null"]);
+        std::fs::create_dir_all(root.join("Software/probe")).unwrap();
+        std::fs::write(root.join(".gitignore"), "Software/probe/issues.org\n").unwrap();
+        std::fs::write(root.join("README"), "seed\n").unwrap();
+        run(&["add", ".gitignore", "README"]);
+        run(&["commit", "-q", "-m", "seed"]);
+        let issues = root.join("Software/probe/issues.org");
+        let heading = "* TODO [#C] Probe\n:PROPERTIES:\n:ID:         probe-b2c3\n:END:\n";
+        std::fs::write(&issues, heading).unwrap();
+        std::env::set_var("VISSUE_ROOT", root);
+        std::env::set_var("VISSUE_NO_ROUTE", "1");
+        std::env::remove_var("ISSUE_ROOT");
+        std::env::set_var("LJOS_TRACKER_GIT", "commit");
+        let said = super::persist_tracker("probe-b2c3", "noted");
+        assert!(said.contains("is ignored"), "{said}");
+        assert!(said.contains("Software/probe/issues.org"), "{said}");
+        assert!(!said.contains("nothing to commit"), "{said}");
+        assert_eq!(run(&["log", "-1", "--format=%s"]).trim(), "seed");
         for var in ["VISSUE_ROOT", "VISSUE_NO_ROUTE", "LJOS_TRACKER_GIT"] {
             std::env::remove_var(var);
         }
