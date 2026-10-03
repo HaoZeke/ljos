@@ -242,7 +242,7 @@ key_file = "~/.config/ljos/jev.key"     # the default judge: Jev
 [judges.chat]
 backend = "chat"
 endpoint = "https://llm.example.org/v1"
-model = "openai/gpt-oss-120b"
+model = "gpt-oss-120b"
 key_env = "LLM_API_KEY"
 budget_ms = 6000
 
@@ -285,7 +285,7 @@ server is up, else a window of the tmux session =ljos-personas=. It
 works in the persona's home, =$XDG_STATE_HOME/ljos/personas/NAME=, as the
 seat named after the persona. Its memories, ballots and trust rows are
 therefore the persona's. It reads the issue and the pack, writes its
-reasoning with =vissue note=, and casts =ljos vote --as NAME=. Each
+reasoning with =ljos note=, and casts =ljos vote --as NAME=. Each
 runner continues the latest session of the directory it starts in, so
 the next hand-off resumes the same conversation, and an open pane takes
 the next task in place. A task goes to the persona's inbox, and the pane

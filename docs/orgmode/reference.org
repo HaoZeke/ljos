@@ -32,6 +32,8 @@
 | =panel ISSUE [--out DIR] [--jev]= | pack, tracker | one brief per persona whose domains the issue speaks to as =DIR/<name>.md=, then the settle line; refused until a playbook is bound. =--jev= asks Jev for every ballot first and casts them only when every seat is sure and all agree; otherwise it writes the briefs |
 | =learn ID --outcome OPTION [--rule record\vert hedge] [--beta B] [--share S]= | tracker, pack | reweigh voters by what turned out right: by default each voter's record of hits and misses as log-odds weights; =hedge= shrinks refuted voters by =B= with =S= recovery |
 | =evidence ACCESSION= / =current ACCESSION= | deed store | intact; still the tip |
+| =file TITLE [--parent ID\vert --top] [-p PROJECT] [-t TYPE] [--tags T] [--priority P] [--body TEXT]= | tracker | file work found while sitting: a child of the held issue unless =--parent= names another or =--top= none, in the parent's project; a projected board takes it into its inbox under the printed id; the tracker file is committed |
+| =note ID TEXT...= | tracker | a dated progress note on the issue, committed |
 | =deed ID [--add ACCESSION]...= | tracker | cite one or more deeds on a node (repeat =--add=), or list citations |
 | =claims [ARGS]= | tracker | who holds what: =vissue claims= with its flags (=--by NAME=, =--json=) |
 | =recall ID= | tracker | the working set |

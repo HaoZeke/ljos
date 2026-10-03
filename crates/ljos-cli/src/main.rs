@@ -125,6 +125,41 @@ enum Cmd {
         #[arg(long)]
         add: Vec<String>,
     },
+    /// File work found while sitting: a child of the issue this
+    /// conversation holds unless `--parent` names another or `--top` none,
+    /// in the parent's project. Prints the new id.
+    File {
+        /// The issue's title.
+        title: String,
+        /// The parent issue; the held issue when omitted.
+        #[arg(long)]
+        parent: Option<String>,
+        /// No parent, even while an issue is held.
+        #[arg(long, conflicts_with = "parent")]
+        top: bool,
+        /// The project; the parent's when omitted.
+        #[arg(short, long)]
+        project: Option<String>,
+        /// The type tag: bug, task, feature, decision.
+        #[arg(short = 't', long = "type")]
+        kind: Option<String>,
+        /// Comma-separated tags.
+        #[arg(long)]
+        tags: Option<String>,
+        /// A, B or C.
+        #[arg(long)]
+        priority: Option<String>,
+        /// Body prose under the heading. A decision's body names `Options: A, B`.
+        #[arg(long)]
+        body: Option<String>,
+    },
+    /// Note progress on an issue, dated, and commit the tracker.
+    Note {
+        issue: String,
+        /// The note; several words are one note.
+        #[arg(required = true, num_args = 1..)]
+        text: Vec<String>,
+    },
     /// Who holds what on the tracker: `vissue claims`, with its flags.
     Claims {
         /// Passed to `vissue claims` as given (`--by NAME`, `--json`, `-p PROJECT`).
@@ -627,6 +662,73 @@ fn main() -> Result<()> {
                 run("vissue", &refs)?;
                 print!("{}", ljos_cli::persist_tracker(&issue, "cited a deed"));
             }
+        }
+        Cmd::File {
+            title,
+            parent,
+            top,
+            project,
+            kind,
+            tags,
+            priority,
+            body,
+        } => {
+            let parent = if top {
+                None
+            } else {
+                parent.or_else(ljos_cli::held_issue)
+            };
+            let project = project.or_else(|| {
+                parent
+                    .as_deref()
+                    .and_then(|p| p.rsplit_once('-'))
+                    .map(|(proj, _)| proj.to_string())
+            });
+            let Some(project) = project else {
+                anyhow::bail!("no project: name one with -p, or a parent with --parent");
+            };
+            let mut argv: Vec<String> = vec!["create".into(), "-p".into(), project];
+            for (flag, value) in [
+                ("--parent", &parent),
+                ("-t", &kind),
+                ("--tags", &tags),
+                ("--priority", &priority),
+                ("--body", &body),
+            ] {
+                if let Some(v) = value {
+                    argv.push(flag.into());
+                    argv.push(v.clone());
+                }
+            }
+            argv.push(title);
+            let out =
+                std::process::Command::new(which::which("vissue").context("vissue not on PATH")?)
+                    .args(&argv)
+                    .stdin(std::process::Stdio::null())
+                    .output()?;
+            let text = String::from_utf8_lossy(&out.stdout);
+            if !out.status.success() {
+                anyhow::bail!(
+                    "vissue create: {}",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                );
+            }
+            let id = text.split_whitespace().next().unwrap_or("").to_string();
+            print!("{text}");
+            // An issue for a projected board waits in its inbox until the fold.
+            let inbox = text
+                .lines()
+                .find_map(|l| l.strip_prefix("inbox: "))
+                .and_then(|l| l.split(" (").next())
+                .map(std::path::PathBuf::from);
+            match inbox {
+                Some(path) => print!("{}", ljos_cli::persist_tracker_file(&path, &id, "filed")),
+                None => print!("{}", ljos_cli::persist_tracker(&id, "filed")),
+            }
+        }
+        Cmd::Note { issue, text } => {
+            run("vissue", &["note", &issue, &text.join(" ")])?;
+            print!("{}", ljos_cli::persist_tracker(&issue, "noted"));
         }
         Cmd::Claims { args } => {
             let mut argv = vec!["claims"];
