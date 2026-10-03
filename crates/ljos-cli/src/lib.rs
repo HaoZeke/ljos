@@ -6809,10 +6809,66 @@ fn ssh_remote_command(words: &[&str]) -> Option<String> {
     Some(unquoted.to_string())
 }
 
+/// A command's shell words, quotes and escapes resolved, with each output
+/// redirection outside quotes as a word of its own (`>`, its file
+/// descriptor dropped): `echo "a > b" 2>>f` is `echo`, `a > b`, `>`, `f`.
+fn shell_words(segment: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut started = false;
+    let mut quote: Option<char> = None;
+    let mut chars = segment.chars().peekable();
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some('"'), '\\') => {
+                if let Some(n) = chars.next() {
+                    word.push(n);
+                }
+            }
+            (Some(_), c) => word.push(c),
+            (None, '\'' | '"') => {
+                quote = Some(c);
+                started = true;
+            }
+            (None, '\\') => {
+                if let Some(n) = chars.next() {
+                    word.push(n);
+                    started = true;
+                }
+            }
+            (None, '>') => {
+                // `2>`, `&>`: the descriptor belongs to the redirection.
+                if !(word.chars().all(|d| d.is_ascii_digit()) || word == "&") {
+                    words.push(std::mem::take(&mut word));
+                }
+                word.clear();
+                started = false;
+                while matches!(chars.peek(), Some('>' | '|' | '&')) {
+                    chars.next();
+                }
+                words.push(">".to_string());
+            }
+            (None, c) if c.is_whitespace() => {
+                if started || !word.is_empty() {
+                    words.push(std::mem::take(&mut word));
+                }
+                started = false;
+            }
+            (None, c) => word.push(c),
+        }
+    }
+    if started || !word.is_empty() {
+        words.push(word);
+    }
+    words
+}
+
 /// The seat's own guard, before any rule: a shell command that writes one
 /// of [`SEAT_PATHS`] (anything but a reader, or a redirect into it), or a
-/// file tool aimed at one, is refused. `ljos onboard` and `ljos` itself
-/// write them, run by the person.
+/// file tool aimed at one, is refused. A path is a word of its own: a
+/// quoted sentence that names one is data. `ljos onboard` and `ljos`
+/// itself write them, run by the person.
 #[must_use]
 pub fn seat_guard(line: &str) -> Option<Rule> {
     let refuse = |what: &str| {
@@ -6825,8 +6881,19 @@ pub fn seat_guard(line: &str) -> Option<Rule> {
         ),
     }
     };
+    let is_path_word = |w: &str| !w.chars().any(char::is_whitespace) && is_seat_path(w);
     for seg in raw_segments(line) {
-        let words = strip_prefixes(&seg);
+        let mut words = shell_words(&seg);
+        while let Some(w) = words.first() {
+            let assign = w.split_once('=').is_some_and(|(k, _)| {
+                !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            });
+            if assign || ["sudo", "env", "time", "nohup", "exec"].contains(&w.as_str()) {
+                words.remove(0);
+            } else {
+                break;
+            }
+        }
         let Some(first) = words.first() else { continue };
         let first = first.rsplit('/').next().unwrap_or(first);
         if first == "ljos" {
@@ -6836,25 +6903,25 @@ pub fn seat_guard(line: &str) -> Option<Rule> {
         // line is judged as one, so a remote run of a seat binary passes and
         // a remote write to one is refused.
         if first == "ssh" {
-            if let Some(remote) = ssh_remote_command(&words) {
+            let refs: Vec<&str> = words.iter().map(String::as_str).collect();
+            if let Some(remote) = ssh_remote_command(&refs) {
                 if let Some(r) = seat_guard(&remote) {
                     return Some(r);
                 }
                 continue;
             }
         }
-        let redirect_target = seg
-            .split('>')
-            .skip(1)
-            .filter_map(|t| t.trim_start_matches('>').split_whitespace().next())
-            .find(|t| is_seat_path(t));
+        let redirect_target = words
+            .windows(2)
+            .find(|w| w[0] == ">" && is_path_word(&w[1]))
+            .map(|w| w[1].clone());
         if let Some(t) = redirect_target {
-            return Some(refuse(t));
+            return Some(refuse(&t));
         }
         if READERS.contains(&first) {
             continue;
         }
-        if let Some(t) = words.iter().skip(1).find(|w| is_seat_path(w)) {
+        if let Some(t) = words.iter().skip(1).find(|w| is_path_word(w)) {
             return Some(refuse(t));
         }
     }
@@ -16010,6 +16077,22 @@ mod tests {
             Some("PreToolUse"),
         );
         assert_eq!(edit.cue, "write_to_file /home/u/.local/bin/ljos");
+    }
+
+    #[test]
+    fn a_sentence_naming_a_seat_path_is_data() {
+        assert!(
+            seat_guard(r#"vissue create -p surf "plugins" --body "named in ~/.config/ljos/plugins.toml with a digest""#)
+                .is_none()
+        );
+        assert!(seat_guard(r#"git commit -m "the guard covers ~/.local/bin/ljos > x""#).is_none());
+        assert!(seat_guard("printf x>~/.config/ljos/plugins.toml").is_some());
+        assert!(seat_guard("echo x 2>>~/.config/ljos/jev.toml").is_some());
+        assert!(seat_guard(r#"cp /tmp/p "/home/u/.config/ljos/plugins.toml""#).is_some());
+        assert_eq!(
+            shell_words(r#"echo "a > b" 2>>f 'c d'"#),
+            vec!["echo", "a > b", ">", "f", "c d"]
+        );
     }
 
     #[test]

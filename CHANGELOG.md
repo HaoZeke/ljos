@@ -2,6 +2,10 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
+## Unreleased
+
+- The seat guard reads shell words: a quoted sentence that names a seat path is data, and a path word or a redirection outside quotes into one is still refused.
+
 ## 0.23.3 (2026-10-03)
 
 - `ljos onboard --harness NAME` works with no runners file: a runner the
