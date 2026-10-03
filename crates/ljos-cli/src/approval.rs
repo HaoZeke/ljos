@@ -74,7 +74,7 @@ impl Scope {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Request {
     id: String,
     scope: Scope,
@@ -192,6 +192,26 @@ impl Store {
         });
         self.save()?;
         Ok(Some(id))
+    }
+
+    fn pending(&self, id: &str, session: &str) -> Result<Request> {
+        let request = self.requests.iter().find(|request| request.id == id)
+            .context("approval request is unknown, expired, or consumed; retry the original command")?;
+        if request.scope.session != session {
+            bail!("approval belongs to a different conversation");
+        }
+        if request.approved {
+            bail!("request is already approved; retry the original command");
+        }
+        Ok(request.clone())
+    }
+
+    fn confirm(&mut self, pending: &Request) -> Result<String> {
+        let current = self.pending(&pending.id, &pending.scope.session)?;
+        if current.scope != pending.scope || current.created != pending.created {
+            bail!("approval request changed while awaiting consent");
+        }
+        self.approve(&pending.id)
     }
 
     fn approve(&mut self, id: &str) -> Result<String> {
@@ -318,6 +338,76 @@ pub fn approve(id: &str) -> Result<String> {
     Store::open(&root(), now()?)?.approve(id)
 }
 
+/// Ask the connected client's user to consent to an existing request.
+/// Tool arguments identify the request; only the client's form response grants it.
+pub async fn request_approval(
+    id: &str,
+    peer: &rmcp::Peer<rmcp::RoleServer>,
+) -> Result<String> {
+    request_approval_at(id, &crate::holder_name(), peer, &root()).await
+}
+
+async fn request_approval_at(
+    id: &str,
+    session: &str,
+    peer: &rmcp::Peer<rmcp::RoleServer>,
+    root: &Path,
+) -> Result<String> {
+    use rmcp::model::{ElicitRequestParams, ElicitationSchema};
+
+    let started = now()?;
+    let pending = Store::open(root, started)?.pending(id, session)?;
+    let info = peer.peer_info().context("approval client has not initialized")?;
+    let supports_form = info.capabilities.elicitation.as_ref().is_some_and(|cap| {
+        // The original elicitation capability is an empty object and means form.
+        cap.form.is_some() || cap.url.is_none()
+    });
+    if !supports_form {
+        bail!("this client cannot display a consent form; run `ljos approve {id}` in your own terminal");
+    }
+    let schema = ElicitationSchema::from_json_schema(
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "approve": {
+                    "type": "boolean",
+                    "title": "Allow this command once",
+                    "description": "Consent to the exact command and directory shown above.",
+                    "default": false
+                }
+            },
+            "required": ["approve"]
+        }).as_object().expect("object schema").clone()
+    )?;
+    let message = format!(
+        "Allow one attempt of this command?\nCommand (JSON): {}\nDirectory: {}\nConversation: {}\nRule: {}\nReason: {}\nRequest: {}\nThe grant expires fifteen minutes after the request was created.",
+        serde_json::to_string(&pending.scope.command)?,
+        serde_json::to_string(&pending.scope.cwd)?,
+        pending.scope.session, pending.scope.pattern, pending.scope.reason, pending.id
+    );
+    // No store lock spans the user interaction. Confirmation reopens it and
+    // checks expiry, identity and contents before granting the one retry.
+    let remaining = TTL_SECONDS.saturating_sub(started.saturating_sub(pending.created));
+    let answer = peer.create_elicitation_with_timeout(
+        ElicitRequestParams::FormElicitationParams {
+            meta: None,
+            message,
+            requested_schema: schema,
+        },
+        Some(std::time::Duration::from_secs(remaining)),
+    ).await.context("client confirmation failed; command remains blocked")?;
+    if !consents(&answer) {
+        bail!("consent was not granted; command remains blocked");
+    }
+    Store::open(root, now()?)?.confirm(&pending)
+}
+
+fn consents(answer: &rmcp::model::ElicitResult) -> bool {
+    answer.action == rmcp::model::ElicitationAction::Accept
+        && answer.content.as_ref().and_then(|v| v.get("approve"))
+            == Some(&Value::Bool(true))
+}
+
 /// Apply a one-use grant only to an ask verdict. Denials reach the caller
 /// unchanged, including denials from the policy binary.
 pub fn hook_output(input: &str, call: &HookCall, context: &str, verdict: Option<&Rule>) -> String {
@@ -348,7 +438,7 @@ fn hook_output_at(
         result => {
             let mut pending = rule.clone();
             let detail = match result {
-                Ok(Some(id)) => format!("Ask the person to reply `approve {id}` in this conversation, or to run `ljos approve {id}` in a terminal of their own (it refuses under an agent); retry this command once they have. The grant is for one attempt in this directory and conversation and expires fifteen minutes after the request."),
+                Ok(Some(id)) => format!("Call the ljos_request_approval MCP tool with id {id} to show the person a consent form. Or ask the person to reply `approve {id}` in this conversation, or to run `ljos approve {id}` in a terminal of their own (it refuses under an agent). Retry only after consent is recorded. The grant is for one attempt in this directory and conversation and expires fifteen minutes after the request."),
                 Err(error) => format!("Approval could not be recorded: {error:#}. The command remains blocked."),
                 Ok(None) => unreachable!(),
             };

@@ -144,6 +144,14 @@ pub struct ForgetArgs {
     pub why: Option<String>,
 }
 
+/// The pending one-command request printed by the hook.
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalArgs {
+    /// The request id. Consent is collected from the client's user interface.
+    pub id: String,
+}
+
 /// One deed accession.
 #[derive(Deserialize, JsonSchema)]
 pub struct AccessionArgs {
@@ -721,6 +729,27 @@ impl LjosServer {
     #[must_use]
     pub fn at(cards_dir: PathBuf) -> Self {
         Self { cards_dir }
+    }
+
+    #[tool(
+        description = "Show the person a confirmation form for a pending command request printed by the hook. Pass only its id. A grant requires the person's explicit acceptance through the connected client, permits one attempt, and expires with the request. Decline, cancellation, unsupported clients and errors leave the command blocked.",
+        annotations(
+            title = "Approve one command",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn ljos_request_approval(
+        &self,
+        Parameters(args): Parameters<ApprovalArgs>,
+        peer: rmcp::Peer<rmcp::RoleServer>,
+    ) -> Result<Json<Said>, McpError> {
+        let text = ljos_cli::approval::request_approval(&args.id, &peer)
+            .await
+            .map_err(refused)?;
+        Ok(Json(Said { text, aside: None }))
     }
 
     // ---- the pack --------------------------------------------------------
@@ -2161,7 +2190,9 @@ impl ServerHandler for LjosServer {
         request: rmcp::model::CallToolRequestParams,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::CallToolResponse, McpError> {
-        if let Some(fresh) = replaced_binary() {
+        // Elicitation needs this live client connection. The one-call forwarder
+        // only carries a tool result and cannot relay a consent dialog.
+        if let Some(fresh) = replaced_binary().filter(|_| request.name != "ljos_request_approval") {
             let init = context
                 .peer
                 .peer_info()
@@ -2295,7 +2326,7 @@ mod tests {
         let tools = LjosServer::tool_router().list_all();
         assert_eq!(
             tools.len(),
-            41,
+            42,
             "{:?}",
             tools.iter().map(|t| &t.name).collect::<Vec<_>>()
         );
@@ -2349,6 +2380,7 @@ mod tests {
                 "ljos_receive",
                 "ljos_release",
                 "ljos_remember",
+                "ljos_request_approval",
                 "ljos_rule",
                 "ljos_sitting",
                 "ljos_trust",
