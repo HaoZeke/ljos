@@ -2,7 +2,7 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
-## Unreleased
+## 0.24.0 (2026-10-03)
 
 - `ljos vote --as NAME --jev` no longer casts a ballot and then fails: the forecast's claim text names the expected option and its share instead of the whole distribution, which passed the pack's 500-character cap, and the forecast is written before the ballot.
 - At a usage limit the Stop hook holds the turn once per notice and names what to record first: a note on the held issue with what is done and left, `ljos file` for each item left, `ljos remember` for each lesson.
