@@ -3212,7 +3212,7 @@ pub fn work_nudge(call: &HookCall, subagent: bool) -> Option<String> {
     Some(match held_issue() {
         Some(issue) => format!(
             "{count} tool calls on {issue} since the seat last heard from this conversation. \
-             Record what the work has shown: progress is `vissue note {issue} \"...\"`, a lesson \
+             Record what the work has shown: progress is `ljos note {issue} \"...\"`, a lesson \
              that holds next time is `ljos remember \"...\"`, an artifact is `ljos deed {issue} \
              --add ACCESSION`; the work closes with `ljos finish {issue} --lesson \"...\"`."
         ),
@@ -3333,7 +3333,7 @@ pub fn subagent_brief(kind: &str, issue: &str, decision: bool) -> String {
     format!(
         "You are a subagent ({kind}) working under {issue}, which your parent holds. Do not open a sitting \
          on it. {judge} A lesson that will hold next time is `ljos remember \"...\" --as ROLE`; a \
-         finding is `vissue note {issue} \"...\"`. ROLE is a persona from `ljos personas` when one fits \
+         finding is `ljos note {issue} \"...\"`. ROLE is a persona from `ljos personas` when one fits \
          your task, else `{kind}`."
     )
 }
@@ -5830,7 +5830,7 @@ pub fn persona_ballot_task(brief: &str, persona: &str, issue: &str) -> String {
         "{brief}\n\nYou are {persona}. A fast judge was not sure of your ballot on {issue}, so \
          it is yours to reason. Read `vissue show {issue}` and what the pack holds \
          (`ljos search \"...\"`). Write your reasoning in two or three sentences with \
-         `vissue note {issue} \"{persona}: ...\"`, then cast \
+         `ljos note {issue} \"{persona}: ...\"`, then cast \
          `ljos vote {issue} --for OPTION --expect OPTION --as {persona} --used none` (name the \
          deeds you used instead of none). A lesson that will hold next time is \
          `ljos remember \"...\" --as {persona}`. Do not open a sitting, change files or push."
@@ -11163,6 +11163,16 @@ pub fn persist_tracker(issue: &str, verb: &str) -> String {
         Ok(hit) => hit.path,
         Err(e) => return format!("tracker git: could not find {issue}: {e}\n"),
     };
+    persist_tracker_file(&path, issue, verb)
+}
+
+/// [`persist_tracker`] for a file already known: an issue filed into a
+/// projected board's inbox lives there until the fold, not in the corpus.
+pub fn persist_tracker_file(path: &Path, issue: &str, verb: &str) -> String {
+    let mode = std::env::var("LJOS_TRACKER_GIT").unwrap_or_default();
+    if matches!(mode.as_str(), "off" | "0" | "false") {
+        return "tracker git: off (LJOS_TRACKER_GIT)\n".into();
+    }
     let Some(dir) = path.parent() else {
         return format!("tracker git: {} has no directory\n", path.display());
     };
@@ -13706,7 +13716,7 @@ mod tests {
         let said =
             work_nudge(&call("cargo test", "PostToolUse"), false).expect("nudged at the count");
         assert!(
-            said.contains("no issue held") || said.contains("vissue note"),
+            said.contains("no issue held") || said.contains("ljos note"),
             "{said}"
         );
         assert!(

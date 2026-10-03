@@ -8,7 +8,7 @@ name with the prefix `ljos_`.
 | question | store | verbs |
 |---|---|---|
 | what did the human freeze | cards | `cards` (read-only; never extract-on-write) |
-| what is the work, what blocks it, who agrees | tracker (vissue) | `recall`, `vote`, `consensus`, `deed`; `vissue create`, `vissue note`, `vissue update` |
+| what is the work, what blocks it, who agrees | tracker (vissue) | `file`, `note`, `recall`, `vote`, `consensus`, `deed`; `vissue append`, `vissue update` |
 | what does this seat know, standing | pack (packset) | `search`, `island`, `remember`, `prefer`, `forget`, `due`, `graded` |
 | what did the work produce | deed store (deedar) | `evidence`, `current`; `deedar create` |
 | which work is claimable right now | claim graph (claimdag) | `claim`, `release`, `complete` |
@@ -214,7 +214,12 @@ Every piece of work has an issue before it has a claim.
   RUNNER is a `[[harness]]` with a `resume` argv, reasons in a session it
   keeps in a pane: it casts its own ballot and its memories are its own.
   `ljos ask NAME "..."` puts a question to it in that session.
-- Progress goes on the issue, dated: `vissue note ISSUE "..."`; a longer
+- Work found while sitting is filed with `ljos file "TITLE" -t bug`: a
+  child of the held issue, in its project, committed. `--parent ID`
+  names another parent and `--top` none. A board this tracker projects
+  from elsewhere takes the issue into its inbox under the printed id,
+  so a child can name it at once.
+- Progress goes on the issue, dated: `ljos note ISSUE "..."`; a longer
   report is `vissue append ISSUE "..."` (or `--file F`); a tag is
   `vissue update ISSUE -t TAG`.
 
@@ -256,7 +261,7 @@ lock exists before proceeding": the next seat cannot act on that.
   own. What it finds joins the parent's issue. A judgement between
   options is `ljos vote ISSUE --for OPTION --as NAME`. A lesson still
   true next time is `ljos remember "..." --as NAME`, and a finding is
-  `vissue note ISSUE "..."`. NAME is its persona, else its subagent
+  `ljos note ISSUE "..."`. NAME is its persona, else its subagent
   type. On a runner that fires subagent events, the hook names the
   parent's issue on the subagent's first tool result. It keeps the
   subagent working once at its stop while that issue is open.

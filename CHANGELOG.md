@@ -4,6 +4,7 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
+- `ljos file TITLE` files work found while sitting as a child of the held issue, in its project, and commits the tracker; `ljos note ISSUE TEXT` notes progress and commits. The protocol, the work nudge and the panel briefs name them in place of the bare tracker verbs.
 - The seat guard reads shell words: a quoted sentence that names a seat path is data, and a path word or a redirection outside quotes into one is still refused.
 
 ## 0.23.3 (2026-10-03)
