@@ -12,7 +12,7 @@ homepage = "https://leidarljos.github.io"
 description = "Memory, a work tracker and a shell-command gate for coding agents over MCP and hooks."
 
 [workspace.dependencies]
-rmcp = { version = "3.2", features = ["server", "transport-io", "transport-async-rw", "macros"] }
+rmcp = { version = "3.2", features = ["server", "transport-io", "transport-async-rw", "macros", "elicitation"] }
 schemars = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "signal"] }
 anyhow = "1"
