@@ -5822,6 +5822,9 @@ pub fn cast_jev(name: &str, issue: &str, b: &jev::Ballot) -> Result<()> {
         .copied()
         .unwrap_or(b.confidence);
     let p = format!("{:.3}", p.clamp(0.01, 1.0));
+    // The forecast first: a ballot cast with its forecast refused would
+    // stand half recorded, and the command would still say it failed.
+    write_prediction(issue, name, &serde_json::to_string(&b.forecast)?)?;
     run_captured_as(
         "vissue",
         &[
@@ -5836,7 +5839,6 @@ pub fn cast_jev(name: &str, issue: &str, b: &jev::Ballot) -> Result<()> {
         ],
         Some(name),
     )?;
-    write_prediction(issue, name, &serde_json::to_string(&b.forecast)?)?;
     note_jev(
         issue,
         &format!(
@@ -6050,7 +6052,7 @@ pub fn write_prediction(issue: &str, agent: &str, expect: &str) -> Result<Value>
     let workspace = client.workspace();
     let mut atom = atom_body(
         "prediction",
-        &format!("{agent} expects {expect} on {issue}."),
+        &prediction_text(agent, &expect_value, issue),
         &workspace,
     );
     atom["issue"] = Value::String(issue.into());
@@ -6059,6 +6061,29 @@ pub fn write_prediction(issue: &str, agent: &str, expect: &str) -> Result<Value>
     client
         .post_atom(&atom)
         .context("predict: POST /v1/atoms failed")
+}
+
+/// The sentence a forecast is stored under: the option the agent expects
+/// most, with its share when the forecast is a distribution, clipped so the
+/// claim fits the pack's text cap. The whole forecast rides in `expect`.
+#[must_use]
+pub fn prediction_text(agent: &str, expect: &Value, issue: &str) -> String {
+    let said = match expect {
+        Value::Object(shares) => shares
+            .iter()
+            .filter_map(|(k, v)| v.as_f64().map(|p| (k, p)))
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .map_or_else(
+                || "a distribution".to_string(),
+                |(k, p)| format!("{k} at {p:.2}"),
+            ),
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+    let said: String = said.chars().take(200).collect();
+    let agent: String = agent.chars().take(80).collect();
+    let issue: String = issue.chars().take(80).collect();
+    format!("{agent} expects {said} on {issue}.")
 }
 
 /// The latest forecast per agent on an issue.
@@ -16151,6 +16176,26 @@ mod tests {
             Some("PreToolUse"),
         );
         assert_eq!(edit.cue, "write_to_file /home/u/.local/bin/ljos");
+    }
+
+    #[test]
+    fn a_forecast_sentence_fits_the_pack_cap_whatever_the_options() {
+        let mut shares = serde_json::Map::new();
+        for i in 0..40 {
+            shares.insert(
+                format!("option-with-a-long-name-{i:02}"),
+                serde_json::json!(0.02),
+            );
+        }
+        shares.insert("ship".into(), serde_json::json!(0.2));
+        let text = prediction_text("reviewer", &Value::Object(shares), "surf-tw1y");
+        assert_eq!(text, "reviewer expects ship at 0.20 on surf-tw1y.");
+        let long = prediction_text(
+            &"x".repeat(400),
+            &serde_json::json!("y".repeat(900)),
+            &"z".repeat(400),
+        );
+        assert!(long.chars().count() <= 500, "{}", long.chars().count());
     }
 
     #[test]
