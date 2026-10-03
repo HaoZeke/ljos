@@ -2230,10 +2230,12 @@ impl ServerHandler for LjosServer {
     ) -> Result<ReadResourceResponse, McpError> {
         let uri = request.uri.clone();
         if uri == PROTOCOL_URI {
-            return Ok(ReadResourceResult::new(vec![ResourceContents::text(PROTOCOL, uri)])
-                .with_ttl_ms(RESOURCE_TTL_MS)
-                .with_cache_scope(CacheScope::Private)
-                .into());
+            return Ok(
+                ReadResourceResult::new(vec![ResourceContents::text(PROTOCOL, uri)])
+                    .with_ttl_ms(RESOURCE_TTL_MS)
+                    .with_cache_scope(CacheScope::Private)
+                    .into(),
+            );
         }
         let name = card_named(&uri).ok_or_else(|| {
             McpError::resource_not_found(
@@ -2247,10 +2249,12 @@ impl ServerHandler for LjosServer {
         let path = self.cards_dir.join(name);
         // A missing card is an empty card; nothing is created.
         let text = std::fs::read_to_string(&path).unwrap_or_default();
-        Ok(ReadResourceResult::new(vec![ResourceContents::text(text, uri)])
-            .with_ttl_ms(RESOURCE_TTL_MS)
-            .with_cache_scope(CacheScope::Private)
-            .into())
+        Ok(
+            ReadResourceResult::new(vec![ResourceContents::text(text, uri)])
+                .with_ttl_ms(RESOURCE_TTL_MS)
+                .with_cache_scope(CacheScope::Private)
+                .into(),
+        )
     }
 }
 

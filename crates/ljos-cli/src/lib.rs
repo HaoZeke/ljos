@@ -3165,6 +3165,70 @@ pub fn stop_audit(input: &str, stop_active: bool) -> Option<String> {
     jev::audit_reason(&a, turn.test_ran)
 }
 
+/// The id of the runner's notice that its usage limit is reached, when the
+/// latest user-side line of the transcript is one: the line's `uuid`, else
+/// its position. A runner announces the limit as text in the conversation,
+/// not as an event, so the transcript is where the hook sees it.
+#[must_use]
+pub fn limit_notice(transcript: &str) -> Option<String> {
+    let (at, line) = transcript
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| l.contains("\"user\""))
+        .last()?;
+    let v: Value = serde_json::from_str(line).ok()?;
+    let content = &v["message"]["content"];
+    let text = match content {
+        Value::String(s) => s.clone(),
+        Value::Array(parts) => parts
+            .iter()
+            .filter_map(|p| p["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => return None,
+    };
+    let lower = text.to_ascii_lowercase();
+    if !(lower.contains("usage limit reached") || lower.contains("usage limit is reached")) {
+        return None;
+    }
+    Some(
+        v["uuid"]
+            .as_str()
+            .map_or_else(|| format!("line-{at}"), str::to_string),
+    )
+}
+
+/// At a usage limit the turn is held once, so what the conversation knows
+/// reaches the stores before the runner cuts it off: a note on the held
+/// issue saying what is done and what is left, an issue per item left, and
+/// the lessons. `None` when no limit was announced, or this notice was
+/// already answered.
+pub fn limit_stop(input: &str, session: Option<&str>) -> Option<String> {
+    let v: Value = serde_json::from_str(input.trim()).ok()?;
+    let path = v["transcript_path"]
+        .as_str()
+        .or_else(|| v["transcriptPath"].as_str())?;
+    let notice = limit_notice(&std::fs::read_to_string(path).ok()?)?;
+    let key = format!("limit:{notice}");
+    if seen_ids(session).contains(&key) {
+        return None;
+    }
+    mark_seen(session, std::slice::from_ref(&key));
+    let issue = held_issue();
+    let on = issue.as_deref().unwrap_or("ISSUE");
+    Some(format!(
+        "The usage limit is reached; record the work before the turn ends, in this order and \
+         with nothing else: `ljos note {on} \"done: ...; left: ...\"`; `ljos file \"TITLE\"` for \
+         each item left{}; `ljos remember \"...\"` for each lesson that holds next time. Then \
+         stop and tell the person the limit was reached, what is done and what is left.",
+        if issue.is_some() {
+            ""
+        } else {
+            " (no issue is held: open one with `ljos file \"TITLE\" -p PROJECT --top` first)"
+        }
+    ))
+}
+
 /// Tool calls a conversation may make without a word to the seat before the
 /// hook reminds it. A sitting opened at the start and nothing after it is
 /// how long work went unrecorded.
@@ -3218,7 +3282,7 @@ pub fn work_nudge(call: &HookCall, subagent: bool) -> Option<String> {
         ),
         None => format!(
             "{count} tool calls in this conversation with no issue held. Work goes on an issue: \
-             `vissue q -p PROJECT \"TITLE\"` prints an id, then `ljos sitting ID` opens it."
+             `ljos file \"TITLE\" -p PROJECT --top` prints an id, then `ljos sitting ID` opens it."
         ),
     })
 }
@@ -16087,6 +16151,54 @@ mod tests {
             Some("PreToolUse"),
         );
         assert_eq!(edit.cue, "write_to_file /home/u/.local/bin/ljos");
+    }
+
+    #[test]
+    fn a_usage_limit_notice_holds_the_stop_once() {
+        let _env = env_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let before = std::env::var_os("XDG_RUNTIME_DIR");
+        // SAFETY: env_guard serialises the tests that touch the environment.
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", dir.path()) };
+        let transcript = dir.path().join("t.jsonl");
+        let line = |uuid: &str, text: &str| {
+            serde_json::json!({"type": "user", "uuid": uuid, "message": {"role": "user", "content": text}})
+                .to_string()
+        };
+        let quiet = format!("{}\n", line("u1", "carry on"));
+        std::fs::write(&transcript, &quiet).unwrap();
+        let input = serde_json::json!({"transcript_path": transcript}).to_string();
+        assert!(limit_stop(&input, Some("s-limit")).is_none());
+        let limited = format!(
+            "{quiet}{}\n",
+            line(
+                "u2",
+                "[Usage limit reached; a short grace allowance remains.]"
+            )
+        );
+        std::fs::write(&transcript, &limited).unwrap();
+        let said = limit_stop(&input, Some("s-limit")).expect("held at the limit");
+        assert!(
+            said.contains("ljos note") && said.contains("ljos file"),
+            "{said}"
+        );
+        assert!(
+            limit_stop(&input, Some("s-limit")).is_none(),
+            "once per notice"
+        );
+        let again = format!("{limited}{}\n", line("u3", "Usage limit reached again."));
+        std::fs::write(&transcript, again).unwrap();
+        assert!(
+            limit_stop(&input, Some("s-limit")).is_some(),
+            "a new notice holds again"
+        );
+        // SAFETY: as above.
+        unsafe {
+            match before {
+                Some(v) => std::env::set_var("XDG_RUNTIME_DIR", v),
+                None => std::env::remove_var("XDG_RUNTIME_DIR"),
+            }
+        }
     }
 
     #[test]

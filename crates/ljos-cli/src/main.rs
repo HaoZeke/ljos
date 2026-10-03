@@ -1001,6 +1001,12 @@ fn main() -> Result<()> {
             // beside a red test run, or asked work put off, holds it for
             // one more round.
             if call.event == "Stop" && call.shape != ljos_cli::HookShape::Context {
+                // At a usage limit the stores hear what the conversation
+                // knows before the runner cuts it off.
+                if let Some(reason) = ljos_cli::limit_stop(&input, call.session.as_deref()) {
+                    println!("{}", ljos_cli::block_output(call.shape, &reason));
+                    return Ok(());
+                }
                 if let Some(reason) = ljos_cli::stop_audit(&input, stop_active) {
                     println!("{}", ljos_cli::block_output(call.shape, &reason));
                     return Ok(());
