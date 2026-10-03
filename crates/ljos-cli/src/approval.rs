@@ -662,6 +662,30 @@ mod tests {
     }
 
     #[test]
+    fn a_grok_ask_is_the_permission_prompt_and_mints_no_request() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("approvals");
+        let input = serde_json::json!({
+            "hookEventName": "pre_tool_use",
+            "hook_event_name": "PreToolUse",
+            "sessionId": "conversation-1",
+            "cwd": temp.path(),
+            "toolName": "run_terminal_command",
+            "toolInput": {"command": "git push origin main"}
+        })
+        .to_string();
+        let call = hook_call(&input);
+        assert_eq!(call.shape, crate::HookShape::CamelCase);
+        assert!(call.shape.asks());
+        let response: Value = serde_json::from_str(&output(&input, &ask(), &root, 100)).unwrap();
+        assert_eq!(response["decision"], "ask");
+        assert_eq!(response["hookSpecificOutput"]["permissionDecision"], "ask");
+        let reason = response["reason"].as_str().unwrap();
+        assert!(!reason.contains("ljos approve"));
+        assert!(!root.exists());
+    }
+
+    #[test]
     fn approval_does_not_depend_on_the_retry_turn_id() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("approvals");

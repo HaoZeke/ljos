@@ -70,6 +70,9 @@ refuses the command before it runs:
 
 ## Command consent in chat
 
+Grok Build and Claude show an ask rule as the runner's own permission
+prompt. The hook answers `ask`, and approving that prompt runs the command.
+
 An ask rule on a client without a native hook prompt returns a request id.
 Call the MCP tool `ljos_request_approval` with that id. A client supporting MCP
 form elicitation displays the exact command, directory, conversation and
