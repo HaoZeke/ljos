@@ -617,17 +617,26 @@ mod tests {
     #[test]
     fn client_consent_requires_accept_and_a_true_boolean() {
         use rmcp::model::{ElicitResult, ElicitationAction};
-        for action in [ElicitationAction::Accept, ElicitationAction::Decline, ElicitationAction::Cancel] {
-            for content in [None, Some(serde_json::json!({})),
+        for action in [
+            ElicitationAction::Accept,
+            ElicitationAction::Decline,
+            ElicitationAction::Cancel,
+        ] {
+            for content in [
+                None,
+                Some(serde_json::json!({})),
                 Some(serde_json::json!({"approve":false})),
                 Some(serde_json::json!({"approve":"true"})),
                 Some(serde_json::json!({"approve":1})),
-                Some(serde_json::json!({"approve":true}))] {
+                Some(serde_json::json!({"approve":true})),
+            ] {
                 let mut answer = ElicitResult::new(action.clone());
                 answer.content = content.clone();
-                assert_eq!(consents(&answer),
+                assert_eq!(
+                    consents(&answer),
                     action == ElicitationAction::Accept
-                    && content == Some(serde_json::json!({"approve":true})));
+                        && content == Some(serde_json::json!({"approve":true}))
+                );
             }
         }
     }
@@ -662,9 +671,17 @@ mod tests {
         assert!(Store::open(&root, 107).unwrap().confirm(&pending).is_err());
 
         let id = request_id(&output(&input, &ask(), &root, 200));
-        let pending = Store::open(&root, 201).unwrap().pending(&id, "conversation-1").unwrap();
-        assert!(Store::open(&root, 200 + TTL_SECONDS).unwrap().confirm(&pending).is_err());
-        assert_ne!(request_id(&output(&input, &ask(), &root, 200 + TTL_SECONDS)), id);
+        let pending = Store::open(&root, 201)
+            .unwrap()
+            .pending(&id, "conversation-1")
+            .unwrap();
+        assert!(Store::open(&root, 200 + TTL_SECONDS)
+            .unwrap()
+            .confirm(&pending)
+            .is_err());
+        assert_ne!(
+            request_id(&output(&input, &ask(), &root, 200 + TTL_SECONDS)),
+            id
+        );
     }
-
 }
