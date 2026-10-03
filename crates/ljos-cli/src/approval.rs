@@ -195,8 +195,13 @@ impl Store {
     }
 
     fn pending(&self, id: &str, session: &str) -> Result<Request> {
-        let request = self.requests.iter().find(|request| request.id == id)
-            .context("approval request is unknown, expired, or consumed; retry the original command")?;
+        let request = self
+            .requests
+            .iter()
+            .find(|request| request.id == id)
+            .context(
+                "approval request is unknown, expired, or consumed; retry the original command",
+            )?;
         if request.scope.session != session {
             bail!("approval belongs to a different conversation");
         }
@@ -264,10 +269,7 @@ pub fn approve(id: &str) -> Result<String> {
 
 /// Ask the connected client's user to consent to an existing request.
 /// Tool arguments identify the request; only the client's form response grants it.
-pub async fn request_approval(
-    id: &str,
-    peer: &rmcp::Peer<rmcp::RoleServer>,
-) -> Result<String> {
+pub async fn request_approval(id: &str, peer: &rmcp::Peer<rmcp::RoleServer>) -> Result<String> {
     request_approval_at(id, &crate::holder_name(), peer, &root()).await
 }
 
@@ -281,7 +283,9 @@ async fn request_approval_at(
 
     let started = now()?;
     let pending = Store::open(root, started)?.pending(id, session)?;
-    let info = peer.peer_info().context("approval client has not initialized")?;
+    let info = peer
+        .peer_info()
+        .context("approval client has not initialized")?;
     let supports_form = info.capabilities.elicitation.as_ref().is_some_and(|cap| {
         // The original elicitation capability is an empty object and means form.
         cap.form.is_some() || cap.url.is_none()
@@ -301,7 +305,10 @@ async fn request_approval_at(
                 }
             },
             "required": ["approve"]
-        }).as_object().expect("object schema").clone()
+        })
+        .as_object()
+        .expect("object schema")
+        .clone(),
     )?;
     let message = format!(
         "Allow one attempt of this command?\nCommand (JSON): {}\nDirectory: {}\nConversation: {}\nRule: {}\nReason: {}\nRequest: {}\nThe grant expires fifteen minutes after the request was created.",
@@ -312,14 +319,17 @@ async fn request_approval_at(
     // No store lock spans the user interaction. Confirmation reopens it and
     // checks expiry, identity and contents before granting the one retry.
     let remaining = TTL_SECONDS.saturating_sub(started.saturating_sub(pending.created));
-    let answer = peer.create_elicitation_with_timeout(
-        ElicitRequestParams::FormElicitationParams {
-            meta: None,
-            message,
-            requested_schema: schema,
-        },
-        Some(std::time::Duration::from_secs(remaining)),
-    ).await.context("client confirmation failed; command remains blocked")?;
+    let answer = peer
+        .create_elicitation_with_timeout(
+            ElicitRequestParams::FormElicitationParams {
+                meta: None,
+                message,
+                requested_schema: schema,
+            },
+            Some(std::time::Duration::from_secs(remaining)),
+        )
+        .await
+        .context("client confirmation failed; command remains blocked")?;
     if !consents(&answer) {
         bail!("consent was not granted; command remains blocked");
     }
@@ -328,8 +338,7 @@ async fn request_approval_at(
 
 fn consents(answer: &rmcp::model::ElicitResult) -> bool {
     answer.action == rmcp::model::ElicitationAction::Accept
-        && answer.content.as_ref().and_then(|v| v.get("approve"))
-            == Some(&Value::Bool(true))
+        && answer.content.as_ref().and_then(|v| v.get("approve")) == Some(&Value::Bool(true))
 }
 
 /// Apply a one-use grant only to an ask verdict. Denials reach the caller
