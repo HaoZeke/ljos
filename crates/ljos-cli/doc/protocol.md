@@ -219,6 +219,9 @@ Every piece of work has an issue before it has a claim.
   names another parent and `--top` none. A board this tracker projects
   from elsewhere takes the issue into its inbox under the printed id,
   so a child can name it at once.
+- At a usage limit the hook holds the turn once. Spend it on the record and
+  nothing else: `ljos note` the held issue with what is done and left,
+  `ljos file` each item left, `ljos remember` each lesson, then stop.
 - Progress goes on the issue, dated: `ljos note ISSUE "..."`; a longer
   report is `vissue append ISSUE "..."` (or `--file F`); a tag is
   `vissue update ISSUE -t TAG`.
