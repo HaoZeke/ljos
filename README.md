@@ -41,6 +41,35 @@ refuses the command before it runs:
 {"permissionDecision":"deny","permissionDecisionReason":"Never force push. (seat rule `*--force*`)"}
 ```
 
+
+## Command consent in chat
+
+An ask rule on a client without a native hook prompt returns a request id.
+Call the MCP tool `ljos_request_approval` with that id. A client supporting MCP
+form elicitation displays the exact command, directory, conversation and
+rule. Select **Allow this command once** and accept the form to authorize
+one retry. The grant expires fifteen minutes after the request was created.
+
+Declining, dismissing, leaving the checkbox clear, or a client error grants
+nothing. The tool cannot take an approval flag as an argument. A different
+command, directory, conversation or rule still requires its own consent,
+and deny rules remain binding.
+
+For clients without form elicitation, run `ljos approve REQUEST_ID` in your
+own terminal. A chat message by itself is not a grant. The terminal command
+refuses to run under a coding runner.
+
+The MCP connection must load the tool before using it; reconnect after
+upgrading from a version without `ljos_request_approval`. A connection that
+supports this tool keeps its own consent handler when other calls forward
+to an upgraded binary.
+
+Verify the protocol against a built server with:
+
+```sh
+python3 scripts/test_approval.py target/debug/ljos-mcp
+```
+
 ## What you get
 
 - Memory per prompt: one claim per memory, searched with the prompt and
