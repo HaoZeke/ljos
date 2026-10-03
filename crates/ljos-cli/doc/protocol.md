@@ -396,4 +396,5 @@ both; a person at a terminal is their login user.
 
 ## One-command consent
 
-For an ask verdict that names a pending request, call `ljos_request_approval` with its id. The MCP client displays a consent form to the person. Only an accepted form with explicit consent grants one retry in the named directory and conversation within the request lifetime. An unsupported client leaves the command blocked; the person can instead run `ljos approve ID` in their own terminal. Tool arguments and chat text cannot grant consent.
+The `request_approval` verb is served as the MCP tool `ljos_request_approval`.
+For an ask verdict that names a pending request, call that tool with its id. The MCP client displays a consent form to the person. Only an accepted form with explicit consent grants one retry in the named directory and conversation within the request lifetime. An unsupported client leaves the command blocked; the person can instead run `ljos approve ID` in their own terminal. Tool arguments and chat text cannot grant consent.
