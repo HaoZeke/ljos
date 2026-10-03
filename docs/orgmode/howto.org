@@ -117,10 +117,13 @@ $ echo '{"hook_event_name":"PreToolUse","tool_input":{"command":"git push --forc
 
 An =ask= rule uses the caller's approval UI when that UI is supported.
 Otherwise the hook stops the command and prints a request id with
-=ljos approve REQUEST_ID=. The person runs that command in a terminal of
-their own. It refuses under an agent runner or without a terminal, so an
-agent cannot grant itself consent. Once the person says it is done, the
-agent retries the original tool call.
+=ljos approve REQUEST_ID=. The person either replies =approve REQUEST_ID=
+in the same conversation, where the prompt hook records the grant, or runs
+the command in a terminal of their own. The command refuses under an agent
+runner or without a terminal, a request from another conversation is not
+granted from this one, and the seat guard refuses typing an approval into
+a pane, so an agent cannot grant itself consent. Once the person has
+approved, the agent retries the original tool call.
 
 #+begin_src console
 $ ljos approve REQUEST_ID
