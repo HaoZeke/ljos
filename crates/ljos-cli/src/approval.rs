@@ -614,4 +614,57 @@ mod tests {
             .count();
         assert_eq!(allowed, 1);
     }
+    #[test]
+    fn client_consent_requires_accept_and_a_true_boolean() {
+        use rmcp::model::{ElicitResult, ElicitationAction};
+        for action in [ElicitationAction::Accept, ElicitationAction::Decline, ElicitationAction::Cancel] {
+            for content in [None, Some(serde_json::json!({})),
+                Some(serde_json::json!({"approve":false})),
+                Some(serde_json::json!({"approve":"true"})),
+                Some(serde_json::json!({"approve":1})),
+                Some(serde_json::json!({"approve":true}))] {
+                let mut answer = ElicitResult::new(action.clone());
+                answer.content = content.clone();
+                assert_eq!(consents(&answer),
+                    action == ElicitationAction::Accept
+                    && content == Some(serde_json::json!({"approve":true})));
+            }
+        }
+    }
+
+    #[test]
+    fn a_confirmation_rechecks_conversation_contents_expiry_and_single_use() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("approvals");
+        let input = input(temp.path());
+        let id = request_id(&output(&input, &ask(), &root, 100));
+        let pending = {
+            let store = Store::open(&root, 101).unwrap();
+            assert!(store.pending(&id, "conversation-2").is_err());
+            store.pending(&id, "conversation-1").unwrap()
+        };
+        // A dialog holds no lock, so another hook can inspect the same request.
+        assert_eq!(request_id(&output(&input, &ask(), &root, 102)), id);
+        for changed in ["command", "directory", "rule", "created"] {
+            let mut snapshot = pending.clone();
+            match changed {
+                "command" => snapshot.scope.command.push_str(" --force"),
+                "directory" => snapshot.scope.cwd = temp.path().join("elsewhere"),
+                "rule" => snapshot.scope.reason.push_str(" changed"),
+                "created" => snapshot.created += 1,
+                _ => unreachable!(),
+            }
+            assert!(Store::open(&root, 103).unwrap().confirm(&snapshot).is_err());
+        }
+        Store::open(&root, 104).unwrap().confirm(&pending).unwrap();
+        assert!(Store::open(&root, 105).unwrap().confirm(&pending).is_err());
+        assert!(output(&input, &ask(), &root, 106).is_empty());
+        assert!(Store::open(&root, 107).unwrap().confirm(&pending).is_err());
+
+        let id = request_id(&output(&input, &ask(), &root, 200));
+        let pending = Store::open(&root, 201).unwrap().pending(&id, "conversation-1").unwrap();
+        assert!(Store::open(&root, 200 + TTL_SECONDS).unwrap().confirm(&pending).is_err());
+        assert_ne!(request_id(&output(&input, &ask(), &root, 200 + TTL_SECONDS)), id);
+    }
+
 }
