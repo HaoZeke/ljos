@@ -146,7 +146,7 @@ Nothing needs a variable set: `ljos remember` starts the writer when none is ans
 
 ## MCP
 
-`ljos-mcp` serves the same verbs over stdio: thirty-nine tools, each opening with when to call it, the protocol at `ljos://protocol`, the cards read-only at `ljos://cards/`, and three prompts. `ljos_due` returns the soonest eight claims and the total still due. Paste this where the runner keeps its servers:
+`ljos-mcp` serves the same verbs over stdio: forty-one tools, each opening with when to call it, the protocol at `ljos://protocol`, the cards read-only at `ljos://cards/`, and three prompts. `ljos_due` returns the soonest eight claims and the total still due. Paste this where the runner keeps its servers:
 
 ```json
 {"mcpServers": {"ljos": {"command": "ljos-mcp"}}}

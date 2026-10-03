@@ -156,6 +156,37 @@ pub struct DeedArgs {
     pub add: Option<String>,
 }
 
+/// Work found while sitting, filed on the tracker.
+#[derive(Deserialize, JsonSchema)]
+pub struct FileArgs {
+    /// The issue's title.
+    pub title: String,
+    /// The parent issue; absent, the issue this conversation holds.
+    pub parent: Option<String>,
+    /// True for no parent, even while an issue is held.
+    #[serde(default)]
+    pub top: bool,
+    /// The project; absent, the parent's.
+    pub project: Option<String>,
+    /// The type tag: bug, task, feature, decision.
+    pub kind: Option<String>,
+    /// Comma-separated tags.
+    pub tags: Option<String>,
+    /// A, B or C.
+    pub priority: Option<String>,
+    /// Body prose. A decision's body names `Options: A, B`.
+    pub body: Option<String>,
+}
+
+/// A dated progress note on an issue.
+#[derive(Deserialize, JsonSchema)]
+pub struct NoteArgs {
+    /// The issue id.
+    pub issue: String,
+    /// The note.
+    pub text: String,
+}
+
 /// A tracker node.
 #[derive(Deserialize, JsonSchema)]
 pub struct IssueArgs {
@@ -934,6 +965,58 @@ impl LjosServer {
             }
             None => habitat("vissue", &["deed", &args.issue]),
         }
+    }
+
+    #[tool(
+        description = "Call this when the work turns up something to do that is not this issue: it files a child of the issue you hold (or of `parent`, or none with `top`), in that issue's project, and commits the tracker. Returns the new id, which a later child may name as its parent at once.",
+        annotations(
+            title = "File work",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn ljos_file(
+        &self,
+        Parameters(args): Parameters<FileArgs>,
+    ) -> Result<Json<Said>, McpError> {
+        let mut argv: Vec<String> = vec!["file".into(), args.title];
+        if args.top {
+            argv.push("--top".into());
+        }
+        for (flag, value) in [
+            ("--parent", args.parent),
+            ("-p", args.project),
+            ("-t", args.kind),
+            ("--tags", args.tags),
+            ("--priority", args.priority),
+            ("--body", args.body),
+        ] {
+            if let Some(v) = value {
+                argv.push(flag.into());
+                argv.push(v);
+            }
+        }
+        let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+        habitat("ljos", &refs)
+    }
+
+    #[tool(
+        description = "Call this to record progress or a finding on an issue: a dated note on its logbook, with the tracker committed.",
+        annotations(
+            title = "Note progress",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn ljos_note(
+        &self,
+        Parameters(args): Parameters<NoteArgs>,
+    ) -> Result<Json<Said>, McpError> {
+        habitat("ljos", &["note", &args.issue, &args.text])
     }
 
     #[tool(
@@ -2046,7 +2129,7 @@ impl ServerHandler for LjosServer {
              prefer them. By hand: ljos_doctor, ljos_cards, ljos_due then \
              ljos_graded, ljos_search then ljos_island, ljos_playbook, ljos_recall, \
              ljos_timeline, ljos_claim; \
-             during the work ljos_deed, ljos_remember, ljos_vote; after it \
+             during the work ljos_file, ljos_note, ljos_deed, ljos_remember, ljos_vote; after it \
              ljos_island with fire, ljos_complete, ljos_learn. ljos_calibrate \
              moves the trust rows from a project's history when nobody names an \
              outcome. \
@@ -2196,7 +2279,7 @@ mod tests {
         let tools = LjosServer::tool_router().list_all();
         assert_eq!(
             tools.len(),
-            39,
+            41,
             "{:?}",
             tools.iter().map(|t| &t.name).collect::<Vec<_>>()
         );
@@ -2233,6 +2316,7 @@ mod tests {
                 "ljos_complete",
                 "ljos_consolidate",
                 "ljos_deed",
+                "ljos_file",
                 "ljos_findings",
                 "ljos_finish",
                 "ljos_forget",
@@ -2241,6 +2325,7 @@ mod tests {
                 "ljos_handover",
                 "ljos_island",
                 "ljos_learn",
+                "ljos_note",
                 "ljos_persona",
                 "ljos_playbook",
                 "ljos_predict",
