@@ -6988,6 +6988,27 @@ pub fn seat_guard(line: &str) -> Option<Rule> {
         if first == "ljos" {
             continue;
         }
+        // Consent given in the chat is what the person submits; keys an
+        // agent types into a pane would forge it.
+        let types_keys = match first {
+            "tmux" => words.iter().any(|w| w == "send-keys" || w == "send"),
+            "herdr" => words.iter().any(|w| w == "send"),
+            "xdotool" | "wtype" | "ydotool" => true,
+            _ => false,
+        };
+        if types_keys
+            && words
+                .iter()
+                .any(|w| w.to_ascii_lowercase().contains("approve"))
+        {
+            return Some(Rule {
+                pattern: "seat-guard".into(),
+                verdict: "deny".into(),
+                reason: "Typing an approval into a pane would forge the person's consent. Ask the \
+                         person to approve in the chat themselves."
+                    .into(),
+            });
+        }
         // ssh runs its last arguments as a command line on the host: that
         // line is judged as one, so a remote run of a seat binary passes and
         // a remote write to one is refused.
@@ -16244,6 +16265,16 @@ mod tests {
                 None => std::env::remove_var("XDG_RUNTIME_DIR"),
             }
         }
+    }
+
+    #[test]
+    fn an_agent_cannot_type_an_approval_into_a_pane() {
+        let id = "0123456789abcdef0123456789abcdef";
+        assert!(seat_guard(&format!("tmux send-keys -t seat 'approve {id}' Enter")).is_some());
+        assert!(seat_guard(&format!("herdr agent send codex approve {id}")).is_some());
+        assert!(seat_guard(&format!("wtype 'approve {id}'")).is_some());
+        assert!(seat_guard("tmux send-keys -t seat 'cargo test' Enter").is_none());
+        assert!(seat_guard(&format!("vissue note x \"asked to approve {id}\"")).is_none());
     }
 
     #[test]

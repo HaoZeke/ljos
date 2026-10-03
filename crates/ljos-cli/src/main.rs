@@ -1114,7 +1114,24 @@ fn main() -> Result<()> {
                 // to say either.
                 "SessionStart" | "TurnEnd" => String::new(),
                 _ => {
-                    let (ctx, ids) = hook_note(&call, limit);
+                    // The person's prompt is the chat's consent channel; the
+                    // grant goes first, ahead of the hook's deadline.
+                    let granted = (call.event == "UserPromptSubmit")
+                        .then(|| {
+                            ljos_cli::approval::approve_from_prompt(
+                                &call.cue,
+                                call.session.as_deref(),
+                            )
+                        })
+                        .flatten();
+                    let (mut ctx, ids) = hook_note(&call, limit);
+                    if let Some(granted) = granted {
+                        ctx = if ctx.is_empty() {
+                            granted
+                        } else {
+                            format!("{granted}\n{ctx}")
+                        };
+                    }
                     if call.shape != ljos_cli::HookShape::CamelCase {
                         mark_seen(call.session.as_deref(), &ids);
                     }

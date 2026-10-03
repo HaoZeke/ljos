@@ -220,6 +220,82 @@ impl Store {
     }
 }
 
+impl Store {
+    /// [`Store::approve`] for a request this conversation raised: an id
+    /// from another conversation's request, quoted into this one, grants
+    /// nothing.
+    fn approve_in(&mut self, id: &str, session: &str) -> Result<String> {
+        let ours = self
+            .requests
+            .iter()
+            .any(|request| request.id == id && request.scope.session == session);
+        if !ours {
+            bail!("approval {id} was not asked in this conversation");
+        }
+        self.approve(id)
+    }
+}
+
+/// The ids a person's prompt approves: `approve ID` with the 32 hex
+/// characters a hook printed, case of the verb ignored.
+fn approved_ids(prompt: &str) -> Vec<String> {
+    let words: Vec<&str> = prompt
+        .split(|c: char| c.is_whitespace() || c == '`' || c == '"' || c == '\'')
+        .filter(|w| !w.is_empty())
+        .collect();
+    words
+        .windows(2)
+        .filter(|w| w[0].eq_ignore_ascii_case("approve"))
+        .map(|w| {
+            w[1].trim_end_matches(['.', ',', ';', ':', '!'])
+                .to_ascii_lowercase()
+        })
+        .filter(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+        .collect()
+}
+
+/// Consent given in the chat. A prompt reaches the hook as what the person
+/// submitted, a channel no agent writes, so `approve ID` there grants the
+/// request this conversation raised, as `ljos approve ID` in a terminal
+/// does. The seat guard refuses typing an approval into a pane. `None` when
+/// the prompt approves nothing; otherwise one line per id, granted or why
+/// not.
+pub fn approve_from_prompt(prompt: &str, session: Option<&str>) -> Option<String> {
+    approve_from_prompt_at(prompt, session, &root(), now())
+}
+
+fn approve_from_prompt_at(
+    prompt: &str,
+    session: Option<&str>,
+    root: &Path,
+    now: Result<u64>,
+) -> Option<String> {
+    let ids = approved_ids(prompt);
+    if ids.is_empty() {
+        return None;
+    }
+    let mut said = String::new();
+    for id in ids {
+        let line = (|| {
+            let session = session
+                .filter(|s| !s.is_empty())
+                .context("approval needs a conversation id")?;
+            Store::open(
+                root,
+                now.as_ref()
+                    .map_err(|e| anyhow::anyhow!("{e:#}"))
+                    .copied()?,
+            )?
+            .approve_in(&id, session)
+        })();
+        match line {
+            Ok(text) => said.push_str(&format!("The person approved in this chat. {text}")),
+            Err(e) => said.push_str(&format!("approve {id}: {e:#}\n")),
+        }
+    }
+    Some(said)
+}
+
 fn now() -> Result<u64> {
     Ok(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs())
 }
@@ -272,7 +348,7 @@ fn hook_output_at(
         result => {
             let mut pending = rule.clone();
             let detail = match result {
-                Ok(Some(id)) => format!("Ask the person to run `ljos approve {id}` in a terminal of their own (it refuses under an agent), then retry this command once they say it is done. The grant is for one attempt in this directory and conversation and expires fifteen minutes after the request."),
+                Ok(Some(id)) => format!("Ask the person to reply `approve {id}` in this conversation, or to run `ljos approve {id}` in a terminal of their own (it refuses under an agent); retry this command once they have. The grant is for one attempt in this directory and conversation and expires fifteen minutes after the request."),
                 Err(error) => format!("Approval could not be recorded: {error:#}. The command remains blocked."),
                 Ok(None) => unreachable!(),
             };
@@ -335,6 +411,46 @@ mod tests {
         let other = request_id(&output(&input, &ask(), &root, 105));
         assert_ne!(id, other);
         assert!(Store::open(&root, 106).unwrap().approve(&id).is_err());
+    }
+
+    #[test]
+    fn the_person_approves_in_the_chat_for_this_conversation_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("approvals");
+        let input = input(temp.path());
+        let id = request_id(&output(&input, &ask(), &root, 100));
+        assert!(
+            approve_from_prompt_at("carry on", Some("conversation-1"), &root, Ok(101)).is_none()
+        );
+        let elsewhere = approve_from_prompt_at(
+            &format!("approve {id}"),
+            Some("conversation-2"),
+            &root,
+            Ok(101),
+        )
+        .unwrap();
+        assert!(
+            elsewhere.contains("not asked in this conversation"),
+            "{elsewhere}"
+        );
+        assert_eq!(
+            request_id(&output(&input, &ask(), &root, 102)),
+            id,
+            "still pending"
+        );
+        let said = approve_from_prompt_at(
+            &format!("Approve `{id}`, then retry."),
+            Some("conversation-1"),
+            &root,
+            Ok(103),
+        )
+        .unwrap();
+        assert!(said.contains("Approved once"), "{said}");
+        assert!(
+            output(&input, &ask(), &root, 104).is_empty(),
+            "the retry runs once"
+        );
+        assert_ne!(request_id(&output(&input, &ask(), &root, 105)), id);
     }
 
     #[test]

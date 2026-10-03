@@ -2,6 +2,10 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
+## Unreleased
+
+- Consent in the chat: a command an ask rule stopped is approved by the person replying `approve ID` in the same conversation; the prompt hook records the grant, as `ljos approve ID` in a terminal does. A request from another conversation is not granted, and the seat guard refuses typing an approval into a pane.
+
 ## 0.24.0 (2026-10-03)
 
 - `ljos vote --as NAME --jev` no longer casts a ballot and then fails: the forecast's claim text names the expected option and its share instead of the whole distribution, which passed the pack's 500-character cap, and the forecast is written before the ballot.
