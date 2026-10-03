@@ -2,7 +2,7 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
-## Unreleased
+## 0.23.3 (2026-10-03)
 
 - `ljos onboard --harness NAME` works with no runners file: a runner the
   seat ships a shape for (claude, codex, grok, antigravity, opencode, omp,
