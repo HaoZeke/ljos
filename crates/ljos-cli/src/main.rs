@@ -1041,24 +1041,18 @@ fn main() -> Result<()> {
             // An asked push is gated by where it goes: free to the person's
             // own unreleased repository, passed on a cited decision to a
             // released one, the person's to run anywhere else.
-            let cwd = serde_json::from_str::<serde_json::Value>(input.trim())
-                .ok()
-                .and_then(|v| {
-                    v["cwd"]
-                        .as_str()
-                        .or_else(|| v["workspacePaths"][0].as_str())
-                        .map(str::to_string)
-                })
-                .or_else(|| {
-                    std::env::current_dir()
-                        .ok()
-                        .map(|d| d.display().to_string())
-                });
+            let cwd = ljos_cli::hook_directory(input.trim());
             let gated = if tcb_rule.is_some() {
                 None
+            } else if let Err(error) = &cwd {
+                Some(ljos_cli::Rule {
+                    pattern: "tool working directory".into(),
+                    verdict: "deny".into(),
+                    reason: format!("Cannot resolve the command directory: {error:#}"),
+                })
             } else {
                 ljos_cli::redirect_seat_verb(
-                    ljos_cli::gate_push(verdict_for(&rules, &call.cue), &call.cue, cwd.as_deref()),
+                    ljos_cli::gate_push(verdict_for(&rules, &call.cue), &call.cue, cwd.as_ref().ok().and_then(|p| p.to_str())),
                     &call.cue,
                 )
             };

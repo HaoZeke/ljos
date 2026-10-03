@@ -2037,6 +2037,33 @@ fn hook_installed(file: &Path, events: &[String]) -> bool {
     })
 }
 
+/// The directory the tool executes in, including an explicit tool override.
+/// Relative overrides are resolved against the hook's directory.
+pub fn hook_directory(input: &str) -> Result<PathBuf> {
+    let value = serde_json::from_str::<Value>(input).unwrap_or(Value::Null);
+    let base = value["cwd"].as_str()
+        .or_else(|| value["workspacePaths"][0].as_str())
+        .map(PathBuf::from)
+        .map(Ok)
+        .unwrap_or_else(std::env::current_dir)?;
+    if !base.is_absolute() {
+        bail!("hook working directory must be absolute");
+    }
+    let args = value.get("tool_input").filter(|v| !v.is_null())
+        .or_else(|| value.get("toolInput"));
+    let override_dir = args.and_then(|v| v.get("workdir").or_else(|| v.get("cwd")))
+        .filter(|v| !v.is_null());
+    let directory = match override_dir {
+        Some(v) => base.join(v.as_str().context("invalid tool working directory")?),
+        None => base,
+    };
+    let directory = std::fs::canonicalize(directory).context("tool working directory is unavailable")?;
+    if !directory.is_dir() {
+        bail!("tool working directory is not a directory");
+    }
+    Ok(directory)
+}
+
 /// What the runner's hook hands the seat: the event, and the text worth
 /// asking the pack about. From a tool call, the command about to run; from
 /// a prompt, the prompt.
@@ -17409,5 +17436,30 @@ mod tests {
             );
             assert!(!text.contains("HaoZeke"), "{rel} names a fork");
         }
+    }
+
+    #[test]
+    fn push_hook_uses_the_tools_absolute_or_relative_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let child = root.path().join("checkout");
+        std::fs::create_dir(&child).unwrap();
+        for tool in ["tool_input", "toolInput"] {
+            for field in ["workdir", "cwd"] {
+                for directory in [child.to_str().unwrap(), "checkout"] {
+                    let input = serde_json::json!({"cwd":root.path(), tool:{field:directory}});
+                    assert_eq!(hook_directory(&input.to_string()).unwrap(), child);
+                }
+            }
+        }
+        assert_eq!(
+            hook_directory(&serde_json::json!({"cwd":root.path()}).to_string()).unwrap(),
+            root.path()
+        );
+        assert!(hook_directory(&serde_json::json!({
+            "cwd":root.path(), "tool_input":{"workdir":123}
+        }).to_string()).is_err());
+        assert!(hook_directory(&serde_json::json!({
+            "cwd":root.path(), "tool_input":{"workdir":"missing"}
+        }).to_string()).is_err());
     }
 }
