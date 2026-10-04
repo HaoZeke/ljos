@@ -1,20 +1,67 @@
 #+title: Explanation
 #+options: toc:nil num:nil
 
-* Five habitats, one identifier
+* What each store keeps
 
 #+ATTR_HTML: :alt The seat over five habitats, joined by the deed accession :width 100%
 [[file:_static/seat.svg]]
 
-Each habitat answers one question and is the authority for it. Cards
-are read-only. A deed accession is the one identifier that crosses the
-writable habitats: the tracker cites it on a node, the pack cites it
-in a claim, the deed store answers for it. No habitat opens another's
-format. The seat composes them by passing accessions on pipes, and
-stays thin: its only state of its own is the mapping from tracker ids
-to claim-graph nodes. Argv law sits beside them. It is not a sixth
-store. =ljos policy= prints the line; =ljos-policyd= is the TCB when
-it is on =PATH= or =POLICYD_BIN=.
+ljos keeps nothing of its own. Each kind of fact lives in one store, and
+ljos calls that store's command line to read or write it.
+
+| Store | Keeps | Lives | Lasts | Written by | Look at it |
+|---+---+---+---+---+---|
+| tracker (vissue) | issues, notes, votes, the deeds an issue cites | org files in a git repository | as long as the repository | =ljos file=, =note=, =vote=, =finish= | =vissue show ISSUE= |
+| pack (packset) | memories: lessons, preferences, rules, personas, trust | the =packsetd= daemon's store | until superseded or forgotten | =ljos remember=, =prefer=, =rule=, =learn= | =ljos search WORDS= |
+| deed store (deedar) | signed records of what a piece of work produced | a content-addressed directory | permanent | =deedar create= | =ljos evidence ACCESSION= |
+| claim graph (claimdag) | who is working on what right now, as a lease per sitting | =$XDG_RUNTIME_DIR/claimdag=, one per machine | until reboot | =ljos sitting=, =finish=, =release= | =claimdag list --all= |
+| consensus | the weighting that settles a vote | computed from the tracker and the pack | nothing stored | =ljos consensus= | =ljos consensus ISSUE= |
+
+The claim graph shows itself least, by design. It answers a question
+that matters while work runs: is anyone already on this issue, here,
+now? =ljos sitting= takes the issue's node before it returns. A second
+sitting on the same issue from another conversation learns who has it.
+=ljos finish= marks the node done. The store sits in the runtime
+directory, so a reboot clears it, and a lease never outlives its holder.
+=ljos doctor= shows its row, =ljos seat= names this conversation's
+holder, and =claimdag list= shows every live claim.
+
+A deed accession is the one identifier the writable stores share. The
+tracker cites it on an issue and the pack cites it in a memory; the deed
+store answers for it.
+
+* How a shell command is judged
+
+Before an agent's shell command runs, the runner's hook hands it to
+=ljos hook=, which asks four layers in order. No later layer can allow
+what an earlier one refused, so the first refusal wins.
+
+1. *The seat guard.* It refuses a command that writes the seat's own
+   files. Those are its binaries, its hook entries, =~/.config/ljos= and
+   the approvals store. An agent cannot rewrite the law it runs under.
+2. *ljos-policyd.* Each pipeline of the line goes to =ljos-policyd= as
+   one call, in shell words. It refuses privilege runners and a
+   download handed to a shell. It also refuses a recursive delete outside
+   =/tmp=, a setuid =chmod=, raw-disk writes and a force push. =ljos doctor='s =policy=
+   row says whether it runs the table built into it or phronesis after
+   that table. Without the binary nothing is refused here, unless
+   =POLICYD_REQUIRED=1= refuses everything instead.
+3. *Seat rules.* The rules written with =ljos rule PATTERN --verdict
+   deny|ask= live in the pack and are tried against each command of the
+   line. A quoted sentence or a heredoc body counts as data.
+4. *The push check.* A =git push= is free to a repository the account
+   owns alone and has never released; to any other it needs
+   =LJOS_CITE= set to the issue that records the decision behind it.
+
+An =ask= verdict is a question for the person. On Claude Code it is the
+runner's own permission prompt. On a runner without one, the hook
+prints a request id and the person replies =approve ID= in the same
+conversation, or runs =ljos approve ID= in a terminal. A runner's own
+settings come first: a command its settings deny is refused before any
+hook is asked.
+
+=ljos policy -- COMMAND= prints the combined answer for one command
+without running it.
 
 * The contracts
 
