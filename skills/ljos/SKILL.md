@@ -354,7 +354,9 @@ under equal weights is a count; under calibrated rows it is not.
 - `no tracker ... N unpushed` in `doctor`: the tracker checkout holds
   commits origin does not. Closures on this host are invisible everywhere
   else. Push the tracker. A leftover `tracker-push-*.log` names the last
-  refusal when the push was refused. The row also fails when another remote
+  refusal when the push was refused. The name is the ljos process. The push
+  shell's pid is the sibling `tracker-push-*.child`, and the row stays
+  healthy while that shell or a git child of it is alive. The row also fails when another remote
   of the tracker holds a different head of the branch, as of the last fetch;
   seats that push to different remotes never see each other's claims.
 - `deedar: warning: this deed is signed by ed25519:...`: the host key is
@@ -399,3 +401,8 @@ and where they came from. `LJOS_SEAT` names the seat; a `*_SESSION_ID` still
 names the holder. `VISSUE_AGENT` is
 the tracker's own name for the same thing; `--as` names a persona over
 both; a person at a terminal is their login user.
+
+## One-command consent
+
+The `request_approval` verb is served as the MCP tool `ljos_request_approval`.
+For an ask verdict that names a pending request, call that tool with its id. The MCP client displays a consent form to the person. Only an accepted form with explicit consent grants one retry in the named directory and conversation within the request lifetime. An unsupported client leaves the command blocked. The person can reply `approve ID` in the same conversation, which the prompt hook records, or run `ljos approve ID` in their own terminal. Tool arguments cannot grant consent, and chat text that does not name the id grants nothing.
