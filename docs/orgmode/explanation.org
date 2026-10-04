@@ -45,10 +45,10 @@ what an earlier one refused, so the first refusal wins.
    =/tmp=, a setuid =chmod=, raw-disk writes and a force push. =ljos doctor='s =policy=
    row says whether it runs the table built into it or phronesis after
    that table. Without the binary nothing is refused here, unless
-   =POLICYD_REQUIRED=1= refuses everything instead.
-- *Seat rules.* The rules written with =ljos rule PATTERN --verdict
-   deny|ask= live in the pack and are tried against each command of the
-   line. A quoted sentence or a heredoc body counts as data.
+   =POLICYD_REQUIRED= is set to 1, which refuses everything instead.
+- *Seat rules.* The rules written with =ljos rule= (a pattern, and a
+   verdict of deny or ask) live in the pack and are tried against each
+   command of the line. A quoted sentence or a heredoc body counts as data.
 - *The push check.* A =git push= is free to a repository the account
    owns alone and has never released; to any other it needs
    =LJOS_CITE= set to the issue that records the decision behind it.
