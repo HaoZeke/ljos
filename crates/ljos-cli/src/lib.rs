@@ -17324,7 +17324,7 @@ mod tests {
 
     /// The Claude Code plugin in the repository root is the seat onboard
     /// already registers: the protocol skill, the Claude hook events, and
-    /// a marketplace entry whose name matches the manifest.
+    /// a leidarljos marketplace that also names the vissue tracker.
     #[test]
     fn the_claude_plugin_ships_the_seat() {
         use serde_json::Value;
@@ -17360,9 +17360,22 @@ mod tests {
         let plugin: Value = serde_json::from_str(&read(".claude-plugin/plugin.json")).unwrap();
         let market: Value = serde_json::from_str(&read(".claude-plugin/marketplace.json")).unwrap();
         assert_eq!(plugin["name"], "ljos");
-        assert_eq!(market["plugins"][0]["name"], plugin["name"]);
-        assert_eq!(market["plugins"][0]["source"], "./");
-        assert_eq!(market["plugins"][0]["version"], plugin["version"]);
+        assert_eq!(plugin["repository"], "https://github.com/leidarljos/ljos");
+        assert_eq!(market["name"], "leidarljos");
+        let entries = market["plugins"].as_array().expect("plugins");
+        let ljos_entry = entries
+            .iter()
+            .find(|p| p["name"] == "ljos")
+            .expect("ljos entry");
+        let vissue_entry = entries
+            .iter()
+            .find(|p| p["name"] == "vissue")
+            .expect("vissue entry");
+        assert_eq!(ljos_entry["source"], "./");
+        assert_eq!(ljos_entry["version"], plugin["version"]);
+        assert_eq!(ljos_entry["repository"], plugin["repository"]);
+        assert_eq!(vissue_entry["source"]["source"], "github");
+        assert_eq!(vissue_entry["source"]["repo"], "leidarljos/vissue");
 
         let command = plugin["mcpServers"]["ljos"]["command"].as_str().unwrap();
         assert_eq!(plugin["mcpServers"]["ljos"]["args"][0], "ljos-mcp");
@@ -17390,6 +17403,7 @@ mod tests {
                 !text.contains("/home/"),
                 "{rel} contains a home directory path"
             );
+            assert!(!text.contains("HaoZeke"), "{rel} names a fork");
         }
     }
 }

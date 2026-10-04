@@ -4,10 +4,10 @@
   "description": "Memory, a work tracker and a shell-command gate for Claude Code, with the seat protocol, sitting and finish commands, and the memory hooks.",
   "author": {
     "name": "Rohit Goswami",
-    "url": "https://github.com/HaoZeke"
+    "url": "https://github.com/leidarljos"
   },
   "homepage": "https://leidarljos.github.io",
-  "repository": "https://github.com/HaoZeke/ljos",
+  "repository": "https://github.com/leidarljos/ljos",
   "license": "MIT",
   "keywords": ["memory", "tracker", "hooks", "mcp"],
   "mcpServers": {

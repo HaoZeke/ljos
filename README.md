@@ -41,14 +41,21 @@ the hooks `ljos onboard --harness claude` registers are one plugin. The
 marketplace file is in this repository.
 
 ```
-claude plugin marketplace add HaoZeke/ljos
-claude plugin install ljos@ljos
+claude plugin marketplace add leidarljos/ljos
+claude plugin install ljos@leidarljos
+claude plugin install vissue@leidarljos
 ```
 
-`ljos` and `ljos-mcp` stay on `PATH` (`cargo binstall ljos`, or
-`cargo install ljos`). The plugin runs those binaries; it also looks in
-`~/.cargo/bin` and `~/.local/bin`. Start a new session. `/ljos:sitting ISSUE`
-opens a sitting and `/ljos:finish ISSUE --lesson "..."` closes it.
+`ljos@leidarljos` is this repository: the MCP server, the seat protocol
+skill, the sitting and finish commands, and the hooks
+`ljos onboard --harness claude` registers. `vissue@leidarljos` is the
+tracker server, fetched from `leidarljos/vissue`. `ljos`, `ljos-mcp`, and
+`vissue-mcp` stay on `PATH` (`cargo binstall` or `cargo install` for this
+repository and for vissue). The plugins run those binaries; they also look
+in `~/.cargo/bin` and `~/.local/bin`. packset, deedar, claimdag, consensus,
+and ljos-policyd are the programs those binaries call, installed the same
+way. Start a new session. `/ljos:sitting ISSUE` opens a sitting and
+`/ljos:finish ISSUE --lesson "..."` closes it.
 In a checkout, `claude plugin validate .` checks the marketplace and
 `claude plugin validate .claude-plugin/plugin.json` checks the plugin.
 Pass `--strict` to fail on warnings.
