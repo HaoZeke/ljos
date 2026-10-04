@@ -26,7 +26,12 @@
         "repo": "leidarljos/vissue"
       },
       "description": "The issue tracker for the seat: Org files, a CLI, and an MCP server.",
-      "repository": "https://github.com/leidarljos/vissue"
+      "repository": "https://github.com/leidarljos/vissue",
+      "mcpServers": {
+        "vissue": {
+          "command": "vissue-mcp"
+        }
+      }
     }
   ]
 }

@@ -17376,6 +17376,10 @@ mod tests {
         assert_eq!(ljos_entry["repository"], plugin["repository"]);
         assert_eq!(vissue_entry["source"]["source"], "github");
         assert_eq!(vissue_entry["source"]["repo"], "leidarljos/vissue");
+        assert_eq!(
+            vissue_entry["mcpServers"]["vissue"]["command"],
+            "vissue-mcp"
+        );
 
         let command = plugin["mcpServers"]["ljos"]["command"].as_str().unwrap();
         assert_eq!(plugin["mcpServers"]["ljos"]["args"][0], "ljos-mcp");
