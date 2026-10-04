@@ -723,7 +723,10 @@ mod tests {
         let root = temp.path().join("approvals");
         let held = Store::open(&root, 100).unwrap();
         let started = std::time::Instant::now();
-        let error = Store::open(&root, 101).unwrap_err();
+        let error = match Store::open(&root, 101) {
+            Err(error) => error,
+            Ok(_) => panic!("a held store was opened"),
+        };
         assert!(
             started.elapsed() >= std::time::Duration::from_secs(SIBLING_SECONDS),
             "waited {:?}",
