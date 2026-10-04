@@ -1,0 +1,18 @@
+#!/bin/sh
+# Find a seat binary and run it. The first argument is the binary name.
+# Remaining arguments are its argv. Standard input is passed through.
+name=${1:?binary name}
+shift
+if command -v "$name" >/dev/null 2>&1; then
+  exec "$name" "$@"
+fi
+home=${HOME:-}
+if [ -n "$home" ]; then
+  for dir in "$home/.cargo/bin" "$home/.local/bin"; do
+    if [ -x "$dir/$name" ]; then
+      exec "$dir/$name" "$@"
+    fi
+  done
+fi
+printf '%s\n' "ljos plugin: $name is not installed" >&2
+exit 1

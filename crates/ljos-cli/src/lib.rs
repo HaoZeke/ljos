@@ -17321,4 +17321,75 @@ mod tests {
         assert!(text.contains("ljos release proj-1a2b"), "{text}");
         assert!(text.contains("refused"), "{text}");
     }
+
+    /// The Claude Code plugin in the repository root is the seat onboard
+    /// already registers: the protocol skill, the Claude hook events, and
+    /// a marketplace entry whose name matches the manifest.
+    #[test]
+    fn the_claude_plugin_ships_the_seat() {
+        use serde_json::Value;
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let read = |rel: &str| {
+            std::fs::read_to_string(root.join(rel)).unwrap_or_else(|e| panic!("{rel}: {e}"))
+        };
+        assert_eq!(read("skills/ljos/SKILL.md"), super::skill_text());
+
+        let hooks: Value = serde_json::from_str(&read("hooks/hooks.json")).unwrap();
+        let shipped: super::Harnesses = toml::from_str(super::HARNESSES_EXAMPLE).unwrap();
+        let claude = shipped
+            .harness
+            .iter()
+            .find(|h| h.name == "claude")
+            .expect("claude shape");
+        let events = super::hook_events_of(claude);
+        let obj = hooks["hooks"].as_object().expect("hooks object");
+        assert_eq!(obj.keys().cloned().collect::<Vec<_>>(), events);
+        for event in &events {
+            let group = &obj[event][0];
+            assert_eq!(group["matcher"], super::hook_matcher(event));
+            let hook = &group["hooks"][0];
+            assert_eq!(hook["type"], "command");
+            assert_eq!(hook["timeout"], 20);
+            let command = hook["command"].as_str().unwrap();
+            assert!(
+                command.contains("CLAUDE_PLUGIN_ROOT") && command.ends_with("ljos hook"),
+                "{command}"
+            );
+        }
+
+        let plugin: Value = serde_json::from_str(&read(".claude-plugin/plugin.json")).unwrap();
+        let market: Value = serde_json::from_str(&read(".claude-plugin/marketplace.json")).unwrap();
+        assert_eq!(plugin["name"], "ljos");
+        assert_eq!(market["plugins"][0]["name"], plugin["name"]);
+        assert_eq!(market["plugins"][0]["source"], "./");
+        assert_eq!(market["plugins"][0]["version"], plugin["version"]);
+
+        let command = plugin["mcpServers"]["ljos"]["command"].as_str().unwrap();
+        assert_eq!(plugin["mcpServers"]["ljos"]["args"][0], "ljos-mcp");
+        assert!(command.contains("CLAUDE_PLUGIN_ROOT"), "{command}");
+
+        let sitting = read("commands/sitting.md");
+        let finish = read("commands/finish.md");
+        assert!(sitting.contains("ljos sitting") && sitting.contains("$ARGUMENTS"));
+        assert!(finish.contains("ljos finish") && finish.contains("--close"));
+        let launcher = read("bin/ljos-plugin");
+        assert!(launcher.contains("exec \"$name\" \"$@\""));
+        assert!(launcher.starts_with("#!/bin/sh\n"));
+
+        for rel in [
+            ".claude-plugin/plugin.json",
+            ".claude-plugin/marketplace.json",
+            "hooks/hooks.json",
+            "bin/ljos-plugin",
+            "commands/sitting.md",
+            "commands/finish.md",
+            "skills/ljos/SKILL.md",
+        ] {
+            let text = read(rel);
+            assert!(
+                !text.contains("/home/"),
+                "{rel} contains a home directory path"
+            );
+        }
+    }
 }

@@ -2,6 +2,10 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
+## Unreleased
+
+- Claude Code installs ljos from this repository as a plugin: the MCP server, the seat protocol skill, the sitting and finish commands, and the hooks `ljos onboard --harness claude` registers. `claude plugin marketplace add HaoZeke/ljos` then `claude plugin install ljos@ljos`.
+
 ## 0.24.3 (2026-10-04)
 
 - `ljos doctor` has a `policy` row: the ljos-policyd version and whether it judges with phronesis after its built-in table, or with the table alone; without the binary, it says commands are judged only by seat rules.

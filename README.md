@@ -34,6 +34,23 @@ A preference stands from the moment it is written. A lesson (`ljos remember`)
 comes back once a review or a consolidation promotes it; `ljos due` lists the
 ones waiting.
 
+## Claude Code plugin
+
+The MCP server, the seat protocol skill, the sitting and finish commands, and
+the hooks `ljos onboard --harness claude` registers are one plugin. The
+marketplace file is in this repository.
+
+```
+claude plugin marketplace add HaoZeke/ljos
+claude plugin install ljos@ljos
+```
+
+`ljos` and `ljos-mcp` stay on `PATH` (`cargo binstall ljos`, or
+`cargo install ljos`). The plugin runs those binaries; it also looks in
+`~/.cargo/bin` and `~/.local/bin`. Start a new session. `/ljos:sitting ISSUE`
+opens a sitting and `/ljos:finish ISSUE --lesson "..."` closes it.
+`claude plugin validate .` checks the manifest in a checkout.
+
 When the agent then reaches for `git push --force origin main`, the runner
 refuses the command before it runs:
 
