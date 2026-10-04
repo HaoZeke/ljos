@@ -141,15 +141,9 @@ impl Store {
         if !metadata.is_file() || metadata.uid() != uid || metadata.mode() & 0o077 != 0 {
             bail!("approval store must be owned by this user with mode 0600");
         }
-        // The descriptor owns the lock until close. A busy store refuses the
-        // request so the hook can answer within its caller's deadline.
-        // SAFETY: the descriptor belongs to the open file and stays live here.
-        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-            bail!(
-                "approval store is busy: {}",
-                std::io::Error::last_os_error()
-            );
-        }
+        // The descriptor owns the lock until close. A sibling hook waits
+        // out the grant window; a store that stays locked is refused.
+        lock_store(&file)?;
         if file.metadata()?.len() > MAX_STORE_BYTES {
             bail!("approval store exceeds its size limit");
         }
@@ -175,7 +169,30 @@ impl Store {
         self.file.sync_data()?;
         Ok(())
     }
+}
 
+/// Take the approval-store lock. Sibling hooks of one command arrive
+/// together, so a busy store is waited out for the grant window. A store
+/// that stays locked is refused, and the hook still answers.
+fn lock_store(file: &File) -> Result<()> {
+    let start = std::time::Instant::now();
+    let wait = std::time::Duration::from_secs(SIBLING_SECONDS);
+    loop {
+        // SAFETY: the descriptor belongs to the open file and stays live here.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(());
+        }
+        if start.elapsed() >= wait {
+            bail!(
+                "approval store is busy: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+impl Store {
     fn request_or_consume(&mut self, scope: Scope, now: u64) -> Result<Option<String>> {
         let before = self.requests.len();
         self.requests.retain(|request| match request.spent {
@@ -684,6 +701,38 @@ mod tests {
             .map(|worker| worker.join().unwrap())
             .filter(|allowed| *allowed)
             .count();
-        assert_eq!(allowed, 1);
+        assert_eq!(allowed, 8);
+        let store = Store::open(&root, 102).unwrap();
+        let spent: Vec<_> = store
+            .requests
+            .iter()
+            .filter(|request| request.id == id)
+            .collect();
+        assert_eq!(spent.len(), 1);
+        assert_eq!(spent[0].spent, Some(102));
+        drop(store);
+        assert_ne!(
+            request_id(&output(&input, &ask(), &root, 102 + SIBLING_SECONDS)),
+            id
+        );
+    }
+
+    #[test]
+    fn a_stuck_approval_store_is_refused() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("approvals");
+        let held = Store::open(&root, 100).unwrap();
+        let started = std::time::Instant::now();
+        let error = Store::open(&root, 101).unwrap_err();
+        assert!(
+            started.elapsed() >= std::time::Duration::from_secs(SIBLING_SECONDS),
+            "waited {:?}",
+            started.elapsed()
+        );
+        assert!(
+            error.to_string().contains("approval store is busy"),
+            "{error}"
+        );
+        drop(held);
     }
 }

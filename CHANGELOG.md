@@ -4,7 +4,7 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
-- A grant spent by one hook allows the other hook of that same attempt for five seconds. A later attempt asks again.
+- A grant spent by one hook allows the other hook of that same attempt for five seconds. A hook that finds the store locked waits that long; a store that stays locked is refused. A later attempt asks again.
 
 ## 0.24.3 (2026-10-04)
 
