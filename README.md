@@ -163,7 +163,7 @@ The org site teaches sitting: <https://leidarljos.github.io>. The crate site is 
 | [First write](https://leidarljos.github.io/docs/start/) | Install, remember one sentence, search it back |
 | [Sit](https://leidarljos.github.io/docs/sit/) | `sitting` opens, `finish` closes |
 | [Harnesses](https://leidarljos.github.io/docs/harnesses/) | One entry for any runner; the seat names itself |
-| [Policy](https://leidarljos.github.io/docs/policy/) | `ljos-policyd` is the TCB |
+| [Policy](https://leidarljos.github.io/docs/policy/) | Which shell commands are refused, by which layer, and how the person approves one |
 | [Getting started](https://leidarljos.github.io/ljos/getting-started.html) | Memory, agreement, and a sitting on scratch stores |
 | [How-to](https://leidarljos.github.io/ljos/howto.html) | Hook, onboard, habits, handover, trust |
 | [Reference](https://leidarljos.github.io/ljos/reference.html) | Every verb, tool and variable |
