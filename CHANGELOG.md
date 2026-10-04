@@ -2,6 +2,12 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
+## 0.24.3 (2026-10-04)
+
+- `ljos doctor` has a `policy` row: the ljos-policyd version and whether it judges with phronesis after its built-in table, or with the table alone; without the binary, it says commands are judged only by seat rules.
+- The explanation says what each store keeps, where, for how long and how to look at it, the claim graph included, and how a shell command is judged, layer by layer.
+- Test fixtures and how-to examples use `demo-` ids in place of real tracker ids.
+
 ## 0.24.2 (2026-10-04)
 
 - The TCB judges each pipeline whole, in shell words: `curl URL | sh` reaches `ljos-policyd` as one call, where splitting at the pipe let it pass, and a quoted sentence naming a command is one word.
