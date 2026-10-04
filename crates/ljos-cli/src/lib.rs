@@ -8585,6 +8585,71 @@ fn pid_alive(pid: u32) -> bool {
     unsafe { libc::kill(pid as i32, 0) == 0 }
 }
 
+/// Sibling of `tracker-push-<launcher>.log` that holds the push shell's pid.
+/// The log name is the ljos process, which has exited once the push is the
+/// only thing left.
+fn push_child_record(log: &Path) -> PathBuf {
+    let name = log.file_name().unwrap_or_default().to_string_lossy();
+    let recorded = match name.strip_suffix(".log") {
+        Some(stem) => format!("{stem}.child"),
+        None => format!("{name}.child"),
+    };
+    log.with_file_name(recorded)
+}
+
+fn recorded_push_pid(log: &Path) -> Option<u32> {
+    let text = std::fs::read_to_string(push_child_record(log)).ok()?;
+    text.trim().parse().ok()
+}
+
+/// A `git` process whose parent is the recorded push shell.
+fn git_child_alive(parent: u32) -> bool {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+    let parent = parent.to_string();
+    for ent in entries.flatten() {
+        let name = ent.file_name();
+        let name = name.to_string_lossy();
+        if !name.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let Ok(stat) = std::fs::read_to_string(ent.path().join("stat")) else {
+            continue;
+        };
+        let Some(end) = stat.rfind(')') else {
+            continue;
+        };
+        let Some(open) = stat.find('(') else {
+            continue;
+        };
+        if open >= end {
+            continue;
+        }
+        let mut fields = stat[end + 1..].split_whitespace();
+        let _state = fields.next();
+        let Some(ppid) = fields.next() else {
+            continue;
+        };
+        if ppid == parent && &stat[open + 1..end] == "git" {
+            return true;
+        }
+    }
+    false
+}
+
+/// The launcher pid is live only while ljos is still in its wait. After it
+/// returns, the push is the recorded shell, or a git child of that shell.
+fn push_still_running(log: &Path, launcher: u32) -> bool {
+    if pid_alive(launcher) {
+        return true;
+    }
+    let Some(child) = recorded_push_pid(log) else {
+        return false;
+    };
+    pid_alive(child) || git_child_alive(child)
+}
+
 /// Newest leftover tracker-push log whose process has exited, and whether
 /// any log's process is still running. persist_tracker removes the log on
 /// a foreground success and leaves it on a refusal or a background push.
@@ -8606,7 +8671,7 @@ fn tracker_push_logs() -> (bool, Option<(std::time::SystemTime, PathBuf)>) {
         let Ok(pid) = rest.parse::<u32>() else {
             continue;
         };
-        if pid_alive(pid) {
+        if push_still_running(&ent.path(), pid) {
             running = true;
             continue;
         }
@@ -11324,12 +11389,14 @@ pub fn persist_tracker_file(path: &Path, issue: &str, verb: &str) -> String {
         Ok(c) => c,
         Err(e) => return format!("tracker git: committed {message}; push failed: {e}\n"),
     };
+    let _ = std::fs::write(push_child_record(&log), format!("{}\n", child.id()));
     let wait = push_wait();
     let started = std::time::Instant::now();
     loop {
         match child.try_wait() {
             Ok(Some(status)) if status.success() => {
                 let _ = std::fs::remove_file(&log);
+                let _ = std::fs::remove_file(push_child_record(&log));
                 return format!("tracker git: committed and pushed {message}\n");
             }
             Ok(Some(_)) => {
@@ -13108,6 +13175,78 @@ mod tests {
         let _ = sleeper.wait();
         assert!(ok, "{state}");
         assert!(state.contains("1 unpushed; push still running"), "{state}");
+        for var in ["LJOS_TRACKER_PUSH_WAIT", "XDG_RUNTIME_DIR"] {
+            std::env::remove_var(var);
+        }
+    }
+
+    #[test]
+    fn tracker_row_follows_the_push_child_after_the_launcher_exits() {
+        let _env = env_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let (root, remote) = (dir.path().join("work"), dir.path().join("remote.git"));
+        std::fs::create_dir_all(root.join("Software")).unwrap();
+        let git = |cwd: &std::path::Path, args: &[&str]| {
+            let o = std::process::Command::new("git")
+                .arg("-C")
+                .arg(cwd)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                o.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+        };
+        git(
+            dir.path(),
+            &["init", "-q", "--bare", remote.to_str().unwrap()],
+        );
+        git_scratch(&root);
+        std::fs::write(root.join("Software/.keep"), "").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-q", "-m", "seed"]);
+        git(
+            &root,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
+        git(&root, &["push", "-q", "-u", "origin", "HEAD"]);
+        std::fs::write(root.join("Software/.keep"), "local\n").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-q", "-m", "ahead"]);
+
+        let mut launcher = std::process::Command::new("true").spawn().unwrap();
+        let launcher_pid = launcher.id();
+        let _ = launcher.wait();
+        let mut push = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let logs = dir.path().join("ljos");
+        std::fs::create_dir_all(&logs).unwrap();
+        let log_name = format!("tracker-push-{launcher_pid}.log");
+        std::fs::write(logs.join(&log_name), "").unwrap();
+        std::fs::write(
+            logs.join(format!("tracker-push-{launcher_pid}.child")),
+            format!("{}\n", push.id()),
+        )
+        .unwrap();
+        std::env::set_var("LJOS_TRACKER_PUSH_WAIT", "0");
+        std::env::set_var("XDG_RUNTIME_DIR", dir.path());
+        let id = format!(
+            "vissue 0.16.2\nprotocol: 1\nroot={}\nprefix=Software\n",
+            root.display()
+        );
+        let (state, ok) = super::tracker_state(&id, "VISSUE_ROOT=x");
+        let _ = push.kill();
+        let _ = push.wait();
+        assert!(ok, "{state}");
+        assert!(state.contains("1 unpushed; push still running"), "{state}");
+        assert!(
+            !super::pid_alive(launcher_pid),
+            "the log name is an exited ljos process"
+        );
         for var in ["LJOS_TRACKER_PUSH_WAIT", "XDG_RUNTIME_DIR"] {
             std::env::remove_var(var);
         }
