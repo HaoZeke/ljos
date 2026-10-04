@@ -49,7 +49,9 @@ claude plugin install ljos@ljos
 `cargo install ljos`). The plugin runs those binaries; it also looks in
 `~/.cargo/bin` and `~/.local/bin`. Start a new session. `/ljos:sitting ISSUE`
 opens a sitting and `/ljos:finish ISSUE --lesson "..."` closes it.
-`claude plugin validate .` checks the manifest in a checkout.
+In a checkout, `claude plugin validate .` checks the marketplace and
+`claude plugin validate .claude-plugin/plugin.json` checks the plugin.
+Pass `--strict` to fail on warnings.
 
 When the agent then reaches for `git push --force origin main`, the runner
 refuses the command before it runs:
