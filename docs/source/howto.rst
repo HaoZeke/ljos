@@ -261,7 +261,7 @@ One sitting on the ticket, one island per recipe before it is touched:
 
 .. code:: bash
 
-   ljos sitting ebstack-319z
+   ljos sitting demo-319z
    ljos island "eOn 2.17.10 foss 2026.1"
 
 Then the ladder, each rung its own artifact: ``eb-stack recipe check``,
@@ -276,9 +276,9 @@ builds, and let the graph hand out the work:
 
 .. code:: bash
 
-   ljos bump-plan out --project ebstack --parent ebstack-319z --dry-run
-   ljos bump-plan out --project ebstack --parent ebstack-319z
-   vissue ready -p ebstack
+   ljos bump-plan out --project demo --parent demo-319z --dry-run
+   ljos bump-plan out --project demo --parent demo-319z
+   vissue ready -p demo
 
 One child issue per module the lock builds, blocked by the modules built
 before it; ``ready`` is the frontier a seat can sit on, and ``ljos sitting``
@@ -291,7 +291,7 @@ When the campaign ends, its typed findings are the lessons:
 .. code:: bash
 
    ljos findings out/campaign.json
-   ljos findings out/campaign.json --remember --issue ebstack-319z
+   ljos findings out/campaign.json --remember --issue demo-319z
 
 The first prints one line per finding. The second writes one lesson per
 finding a person or a seat resolved, under the recipe's name, the

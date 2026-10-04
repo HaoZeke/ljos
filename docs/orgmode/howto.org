@@ -379,7 +379,7 @@ weight.
 One sitting on the ticket, one island per recipe before it is touched:
 
 #+begin_src bash
-ljos sitting ebstack-319z
+ljos sitting demo-319z
 ljos island "eOn 2.17.10 foss 2026.1"
 #+end_src
 
@@ -395,9 +395,9 @@ For a whole generation, put the bundle on the tracker before anybody
 builds, and let the graph hand out the work:
 
 #+begin_src bash
-ljos bump-plan out --project ebstack --parent ebstack-319z --dry-run
-ljos bump-plan out --project ebstack --parent ebstack-319z
-vissue ready -p ebstack
+ljos bump-plan out --project demo --parent demo-319z --dry-run
+ljos bump-plan out --project demo --parent demo-319z
+vissue ready -p demo
 #+end_src
 
 One child issue per module the lock builds, blocked by the modules built
@@ -410,7 +410,7 @@ When the campaign ends, its typed findings are the lessons:
 
 #+begin_src bash
 ljos findings out/campaign.json
-ljos findings out/campaign.json --remember --issue ebstack-319z
+ljos findings out/campaign.json --remember --issue demo-319z
 #+end_src
 
 The first prints one line per finding. The second writes one lesson per

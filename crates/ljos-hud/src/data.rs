@@ -652,7 +652,7 @@ mod tests {
     #[test]
     fn looks_like_issue_is_proj_xxxx() {
         assert!(looks_like_issue("ljos-w8kb"));
-        assert!(looks_like_issue("ljos-n7ly"));
+        assert!(looks_like_issue("demo-n7ly"));
         assert!(!looks_like_issue("not-an-issue"));
         assert!(!looks_like_issue("ljos"));
         assert_eq!(issue_of("ljos-w8kb"), "ljos-w8kb");

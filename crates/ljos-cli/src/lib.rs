@@ -7062,8 +7062,8 @@ pub const SEAT_VERBS: &[(&str, &str)] = &[
 ];
 
 /// The exact seat command a denied `vissue VERB ARGS` line should have
-/// been, its arguments carried over: `vissue claim ljos-6c3z` is
-/// `ljos sitting ljos-6c3z`. `None` for a line with no such verb.
+/// been, its arguments carried over: `vissue claim demo-6c3z` is
+/// `ljos sitting demo-6c3z`. `None` for a line with no such verb.
 #[must_use]
 pub fn seat_command_for(line: &str) -> Option<String> {
     command_segments(line).into_iter().find_map(|seg| {
@@ -8271,7 +8271,52 @@ pub fn doctor() -> Vec<Habitat> {
     out.extend(runners);
     out.extend(jev::doctor_row());
     out.push(seat_binary_row());
+    out.push(policy_row());
     out
+}
+
+/// What judges the agents' shell commands: the policyd binary, its
+/// version and which law it runs (`phronesis`, or the `host table` built
+/// into it). Without the binary nothing judges them unless
+/// `POLICYD_REQUIRED` refuses every command instead.
+fn policy_row() -> Habitat {
+    let state = match policyd_bin() {
+        None if policyd_required() => {
+            Err("ljos-policyd is not installed and POLICYD_REQUIRED=1: every shell command is refused; `cargo binstall ljos-policyd`".to_string())
+        }
+        None => Err(
+            "ljos-policyd is not installed: shell commands are judged only by seat rules; `cargo binstall ljos-policyd`"
+                .to_string(),
+        ),
+        Some(bin) => match run_captured(&bin.display().to_string(), &["version"]) {
+            Ok(said) => {
+                let line = said.stdout.trim().to_string();
+                let backend = line
+                    .split_once('(')
+                    .and_then(|(_, rest)| rest.strip_suffix(')'));
+                Ok(match backend {
+                    Some("phronesis") => format!(
+                        "{line} at {}: each pipeline is judged by its built-in table, then by phronesis",
+                        bin.display()
+                    ),
+                    Some(_) => format!(
+                        "{line} at {}: each pipeline is judged by its built-in table; phronesis is not linked",
+                        bin.display()
+                    ),
+                    None => format!(
+                        "{line} at {}: this version does not name its backend; 0.2.5 and later do",
+                        bin.display()
+                    ),
+                })
+            }
+            Err(e) => Err(format!("{} does not answer `version`: {e:#}", bin.display())),
+        },
+    };
+    Habitat {
+        name: "policy",
+        ok: state.is_ok(),
+        state: state.unwrap_or_else(|e| e),
+    }
 }
 
 /// Whether the `ljos` the hooks run is this binary. A runner that swaps
@@ -14080,7 +14125,7 @@ mod tests {
         assert!(is_transient(
             "Pull requests 32 and 36 share one tree, and PR 32 replays PR 36."
         ));
-        assert!(is_transient("The closure is on ljos-wgo8."));
+        assert!(is_transient("The closure is on demo-wgo8."));
         assert!(is_transient("The sweep was commit 80c73416c."));
         assert!(!is_transient(
             "A PR branch has to contain main before it merges."
@@ -15533,12 +15578,12 @@ mod tests {
 
     #[test]
     fn consensus_is_ljos_then_vissue() {
-        let steps = consensus_steps("vissue-1a5a", true, true, &[]).unwrap();
+        let steps = consensus_steps("demo-1a5a", true, true, &[]).unwrap();
         assert_eq!(steps.len(), 2);
         assert_eq!(steps[0].bin, "ljos-consensus");
-        assert_eq!(steps[0].args, vec!["settle", "--issue", "vissue-1a5a"]);
+        assert_eq!(steps[0].args, vec!["settle", "--issue", "demo-1a5a"]);
         assert_eq!(steps[1].bin, "vissue");
-        assert_eq!(steps[1].args, vec!["consensus", "vissue-1a5a"]);
+        assert_eq!(steps[1].args, vec!["consensus", "demo-1a5a"]);
     }
 
     #[test]
@@ -16225,8 +16270,8 @@ mod tests {
             );
         }
         shares.insert("ship".into(), serde_json::json!(0.2));
-        let text = prediction_text("reviewer", &Value::Object(shares), "surf-tw1y");
-        assert_eq!(text, "reviewer expects ship at 0.20 on surf-tw1y.");
+        let text = prediction_text("reviewer", &Value::Object(shares), "demo-tw1y");
+        assert_eq!(text, "reviewer expects ship at 0.20 on demo-tw1y.");
         let long = prediction_text(
             &"x".repeat(400),
             &serde_json::json!("y".repeat(900)),
@@ -16350,8 +16395,8 @@ mod tests {
     #[test]
     fn a_denied_tracker_verb_names_the_seat_command_to_run() {
         assert_eq!(
-            seat_command_for("vissue claim ljos-6c3z").as_deref(),
-            Some("ljos sitting ljos-6c3z")
+            seat_command_for("vissue claim demo-6c3z").as_deref(),
+            Some("ljos sitting demo-6c3z")
         );
         assert_eq!(
             seat_command_for("cd notes && vissue vote surf-ab12 --for A").as_deref(),
@@ -16359,8 +16404,8 @@ mod tests {
         );
         assert_eq!(seat_command_for("vissue claims --by codex"), None);
         assert_eq!(
-            seat_command_for("vissue vote surf-kfqh --for A 2>&1 | head").as_deref(),
-            Some("ljos vote surf-kfqh --for A"),
+            seat_command_for("vissue vote demo-kfqh --for A 2>&1 | head").as_deref(),
+            Some("ljos vote demo-kfqh --for A"),
             "a redirection is the shell's"
         );
         let vote = Rule {
@@ -16369,19 +16414,19 @@ mod tests {
             reason: "use ljos vote".into(),
         };
         assert!(
-            redirect_seat_verb(Some(vote.clone()), "vissue vote surf-kfqh 2>&1 | head").is_none(),
+            redirect_seat_verb(Some(vote.clone()), "vissue vote demo-kfqh 2>&1 | head").is_none(),
             "the tally is a read"
         );
-        assert!(redirect_seat_verb(Some(vote.clone()), "vissue vote surf-kfqh --for A").is_some());
-        assert!(redirect_seat_verb(Some(vote), "vissue vote surf-kfqh --withdraw").is_some());
+        assert!(redirect_seat_verb(Some(vote.clone()), "vissue vote demo-kfqh --for A").is_some());
+        assert!(redirect_seat_verb(Some(vote), "vissue vote demo-kfqh --withdraw").is_some());
         assert_eq!(seat_command_for("ljos sitting x"), None);
         let deny = Rule {
             pattern: "vissue claim*".into(),
             verdict: "deny".into(),
             reason: "Use ljos sitting.".into(),
         };
-        let r = redirect_seat_verb(Some(deny), "vissue claim ljos-6c3z").unwrap();
-        assert!(r.reason.ends_with("Run `ljos sitting ljos-6c3z` instead."));
+        let r = redirect_seat_verb(Some(deny), "vissue claim demo-6c3z").unwrap();
+        assert!(r.reason.ends_with("Run `ljos sitting demo-6c3z` instead."));
     }
 
     #[test]
@@ -16495,7 +16540,7 @@ mod tests {
             verdict: "deny".into(),
             reason: "use ljos sitting".into(),
         }];
-        assert!(verdict_for(&claim, "vissue claim ljos-6c3z").is_some());
+        assert!(verdict_for(&claim, "vissue claim demo-6c3z").is_some());
         assert!(verdict_for(&claim, "vissue claim").is_some());
         assert!(
             verdict_for(&claim, "vissue claims --by codex").is_none(),
