@@ -4,6 +4,7 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
+- A background tracker push stays visible to doctor after ljos exits. The log name remains the ljos pid. The push shell pid is written beside it, and the row stays healthy while that shell or a git child of it is alive.
 - An ignored tracker file is reported with the ignore rule that keeps it out of the commit. A clean tracked file still reports nothing to commit.
 - Grok Build receives an ask rule as `ask` on `decision` and `permissionDecision`, and shows its in-chat permission prompt. A runner that cannot ask still has the ask rewritten to a deny, with a one-use request id.
 - Claude Code installs the seat from the leidarljos marketplace in this repository. `claude plugin marketplace add leidarljos/ljos`, then `claude plugin install ljos@leidarljos` for the MCP server, the seat protocol skill, the sitting and finish commands, and the hooks `ljos onboard --harness claude` registers. `claude plugin install vissue@leidarljos` fetches the tracker server from leidarljos/vissue.
