@@ -33,23 +33,23 @@ store answers for it.
 * How a shell command is judged
 
 Before an agent's shell command runs, the runner's hook hands it to
-=ljos hook=, which asks four layers in order. No later layer can allow
+=ljos hook=, which asks four layers, in the order below. No later layer can allow
 what an earlier one refused, so the first refusal wins.
 
-1. *The seat guard.* It refuses a command that writes the seat's own
+- *The seat guard.* It refuses a command that writes the seat's own
    files. Those are its binaries, its hook entries, =~/.config/ljos= and
    the approvals store. An agent cannot rewrite the law it runs under.
-2. *ljos-policyd.* Each pipeline of the line goes to =ljos-policyd= as
+- *ljos-policyd.* Each pipeline of the line goes to =ljos-policyd= as
    one call, in shell words. It refuses privilege runners and a
    download handed to a shell. It also refuses a recursive delete outside
    =/tmp=, a setuid =chmod=, raw-disk writes and a force push. =ljos doctor='s =policy=
    row says whether it runs the table built into it or phronesis after
    that table. Without the binary nothing is refused here, unless
    =POLICYD_REQUIRED=1= refuses everything instead.
-3. *Seat rules.* The rules written with =ljos rule PATTERN --verdict
+- *Seat rules.* The rules written with =ljos rule PATTERN --verdict
    deny|ask= live in the pack and are tried against each command of the
    line. A quoted sentence or a heredoc body counts as data.
-4. *The push check.* A =git push= is free to a repository the account
+- *The push check.* A =git push= is free to a repository the account
    owns alone and has never released; to any other it needs
    =LJOS_CITE= set to the issue that records the decision behind it.
 
