@@ -4,6 +4,7 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
+- An ask a runner cannot show as its own prompt is granted by the client's consent form (`ljos_request_approval`), by replying `approve ID` in the same conversation, or by `ljos approve ID` in a terminal.
 - A background tracker push stays visible to doctor after ljos exits. The log name remains the ljos pid. The push shell pid is written beside it, and the row stays healthy while that shell or a git child of it is alive.
 - An ignored tracker file is reported with the ignore rule that keeps it out of the commit. A clean tracked file still reports nothing to commit.
 - Grok Build receives an ask rule as `ask` on `decision` and `permissionDecision`, and shows its in-chat permission prompt. A runner that cannot ask still has the ask rewritten to a deny, with a one-use request id.

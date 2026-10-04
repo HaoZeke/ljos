@@ -109,7 +109,7 @@ Model Context Protocol (MCP) tools
 ==================================
 
 Writers: ``ljos_sitting``, ``ljos_finish``, ``ljos_calibrate``, ``ljos_persona``, ``ljos_playbook``, ``ljos_remember``, ``ljos_prefer``, ``ljos_forget``, ``ljos_trust``,
-``ljos_learn``, ``ljos_graded``, ``ljos_island``, ``ljos_deed``, ``ljos_vote``, ``ljos_predict``, ``ljos_rule``, ``ljos_claim``,
+``ljos_learn``, ``ljos_graded``, ``ljos_island``, ``ljos_deed``, ``ljos_vote``, ``ljos_predict``, ``ljos_rule``, ``ljos_request_approval``, ``ljos_claim``,
 ``ljos_release``, ``ljos_complete``, ``ljos_consolidate``, ``ljos_findings`` (a reader without ``remember``), ``ljos_bump_plan`` (a reader with ``dry_run``), ``ljos_handover``, ``ljos_receive``. Readers: ``ljos_search`` (with ``as_of``), ``ljos_conflicts``,
 ``ljos_timeline``, ``ljos_due``, ``ljos_habit`` (a writer with a value), ``ljos_evidence``, ``ljos_current``, ``ljos_recall``,
 ``ljos_consensus``, ``ljos_brief``, ``ljos_personas``, ``ljos_playbooks``, ``ljos_cards``, ``ljos_policy``, ``ljos_doctor``. Resources:

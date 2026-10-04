@@ -53,10 +53,11 @@ what an earlier one refused, so the first refusal wins.
    owns alone and has never released; to any other it needs
    =LJOS_CITE= set to the issue that records the decision behind it.
 
-An =ask= verdict is a question for the person. On Claude Code it is the
-runner's own permission prompt. On a runner without one, the hook
-prints a request id and the person replies =approve ID= in the same
-conversation, or runs =ljos approve ID= in a terminal. A runner's own
+An =ask= verdict is a question for the person. On Claude Code and Grok
+Build it is the runner's own permission prompt. On a runner without one,
+the hook prints a request id. The person calls =ljos_request_approval=
+with that id so the client shows a consent form, replies =approve ID= in
+the same conversation, or runs =ljos approve ID= in a terminal. A runner's own
 settings come first: a command its settings deny is refused before any
 hook is asked.
 

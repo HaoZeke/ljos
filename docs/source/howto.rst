@@ -114,11 +114,15 @@ calls and one prompt. On a tool call the hook applies the TCB
    {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"git-force-push (seat rule `ljos-policyd`)"}}
 
 An ``ask`` rule uses the caller's approval UI when that UI is supported.
-Otherwise the hook stops the command and prints a request id with
-``ljos approve REQUEST_ID``. Once the person has explicitly approved that
-command, run the printed command to record consent, then retry the
-original tool call. Consent already given for that request counts; there
-is no need to ask the same question again.
+Otherwise the hook stops the command and prints a request id. Calling
+``ljos_request_approval`` with that id shows a consent form in a client
+that can display one. Otherwise the person replies ``approve REQUEST_ID``
+in the same conversation, where the prompt hook records the grant, or runs
+``ljos approve REQUEST_ID`` in a terminal of their own. The command refuses
+under an agent runner or without a terminal, a request from another
+conversation is not granted from this one, and the seat guard refuses
+typing an approval into a pane, so an agent cannot grant itself consent.
+Once the person has approved, the agent retries the original tool call.
 
 .. code:: console
 

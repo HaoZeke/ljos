@@ -84,9 +84,10 @@ nothing. The tool cannot take an approval flag as an argument. A different
 command, directory, conversation or rule still requires its own consent,
 and deny rules remain binding.
 
-For clients without form elicitation, run `ljos approve REQUEST_ID` in your
-own terminal. A chat message by itself is not a grant. The terminal command
-refuses to run under a coding runner.
+For clients without form elicitation, reply `approve REQUEST_ID` in this
+conversation, or run `ljos approve REQUEST_ID` in your own terminal. The
+terminal command refuses to run under a coding runner. A chat message that
+does not name that id grants nothing.
 
 The MCP connection must load the tool before using it; reconnect after
 upgrading from a version without `ljos_request_approval`. A connection that

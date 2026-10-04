@@ -116,10 +116,11 @@ $ echo '{"hook_event_name":"PreToolUse","tool_input":{"command":"git push --forc
 #+end_src
 
 An =ask= rule uses the caller's approval UI when that UI is supported.
-Otherwise the hook stops the command and prints a request id with
-=ljos approve REQUEST_ID=. The person either replies =approve REQUEST_ID=
+Otherwise the hook stops the command and prints a request id. Calling
+=ljos_request_approval= with that id shows a consent form in a client
+that can display one. Otherwise the person replies =approve REQUEST_ID=
 in the same conversation, where the prompt hook records the grant, or runs
-the command in a terminal of their own. The command refuses under an agent
+=ljos approve REQUEST_ID= in a terminal of their own. The command refuses under an agent
 runner or without a terminal, a request from another conversation is not
 granted from this one, and the seat guard refuses typing an approval into
 a pane, so an agent cannot grant itself consent. Once the person has
@@ -245,7 +246,7 @@ key_file = "~/.config/ljos/jev.key"     # the default judge: Jev
 [judges.chat]
 backend = "chat"
 endpoint = "https://llm.example.org/v1"
-model = "openai/gpt-oss-120b"
+model = "gpt-oss-120b"
 key_env = "LLM_API_KEY"
 budget_ms = 6000
 
