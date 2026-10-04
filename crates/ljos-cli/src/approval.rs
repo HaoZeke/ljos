@@ -14,6 +14,9 @@ use serde_json::Value;
 use crate::{hook_output_ruled, HookCall, Rule};
 
 const TTL_SECONDS: u64 = 15 * 60;
+/// Two hook processes judge one command. The first spends the grant and
+/// the second arrives within this window; both allow. A later attempt asks.
+const SIBLING_SECONDS: u64 = 5;
 const MAX_REQUESTS: usize = 256;
 const MAX_STORE_BYTES: u64 = 2 * 1024 * 1024;
 
@@ -80,6 +83,17 @@ struct Request {
     scope: Scope,
     created: u64,
     approved: bool,
+    /// When the grant was spent. Absent on a request that is still pending
+    /// or approved and not yet used. Sibling hooks allow while this is young.
+    #[serde(default)]
+    spent: Option<u64>,
+}
+
+impl Request {
+    fn sibling_open(&self, now: u64) -> bool {
+        self.spent
+            .is_some_and(|spent| now.saturating_sub(spent) < SIBLING_SECONDS)
+    }
 }
 
 impl Request {
@@ -163,17 +177,41 @@ impl Store {
     }
 
     fn request_or_consume(&mut self, scope: Scope, now: u64) -> Result<Option<String>> {
-        if let Some(index) = self
+        let before = self.requests.len();
+        self.requests.retain(|request| match request.spent {
+            Some(spent) => now.saturating_sub(spent) < SIBLING_SECONDS,
+            None => true,
+        });
+        if self
             .requests
             .iter()
-            .position(|request| request.scope == scope)
+            .any(|request| request.scope == scope && request.sibling_open(now))
         {
-            if self.requests[index].approved {
-                self.requests.remove(index);
+            if self.requests.len() != before {
                 self.save()?;
-                return Ok(None);
             }
-            return Ok(Some(self.requests[index].id.clone()));
+            return Ok(None);
+        }
+        if let Some(index) = self.requests.iter().position(|request| {
+            request.scope == scope && request.approved && request.spent.is_none()
+        }) {
+            self.requests[index].spent = Some(now);
+            let keep = self.requests[index].id.clone();
+            self.requests
+                .retain(|request| request.scope != scope || request.id == keep);
+            self.save()?;
+            return Ok(None);
+        }
+        if let Some(request) = self
+            .requests
+            .iter()
+            .find(|request| request.scope == scope && !request.approved)
+        {
+            let id = request.id.clone();
+            if self.requests.len() != before {
+                self.save()?;
+            }
+            return Ok(Some(id));
         }
         if self.requests.len() >= MAX_REQUESTS {
             bail!("too many pending approvals; expired requests clear after fifteen minutes");
@@ -189,6 +227,7 @@ impl Store {
             scope,
             created: now,
             approved: false,
+            spent: None,
         });
         self.save()?;
         Ok(Some(id))
@@ -348,8 +387,12 @@ fn hook_output_at(
         result => {
             let mut pending = rule.clone();
             let detail = match result {
-                Ok(Some(id)) => format!("Ask the person to reply `approve {id}` in this conversation, or to run `ljos approve {id}` in a terminal of their own (it refuses under an agent); retry this command once they have. The grant is for one attempt in this directory and conversation and expires fifteen minutes after the request."),
-                Err(error) => format!("Approval could not be recorded: {error:#}. The command remains blocked."),
+                Ok(Some(id)) => format!(
+                    "Ask the person to reply `approve {id}` in this conversation, or to run `ljos approve {id}` in a terminal of their own (it refuses under an agent); retry this command once they have. The grant is for one attempt in this directory and conversation and expires fifteen minutes after the request."
+                ),
+                Err(error) => format!(
+                    "Approval could not be recorded: {error:#}. The command remains blocked."
+                ),
                 Ok(None) => unreachable!(),
             };
             pending.reason = format!("{} {detail}", rule.reason);
@@ -407,10 +450,15 @@ mod tests {
         assert_eq!(request_id(&output(&input, &ask(), &root, 101)), id);
         Store::open(&root, 102).unwrap().approve(&id).unwrap();
         assert!(output(&input, &ask(), &root, 103).is_empty());
+        // The other hook of this attempt arrives while the grant is spent.
+        assert!(output(&input, &ask(), &root, 104).is_empty());
         assert!(Store::open(&root, 104).unwrap().approve(&id).is_err());
-        let other = request_id(&output(&input, &ask(), &root, 105));
+        let other = request_id(&output(&input, &ask(), &root, 103 + SIBLING_SECONDS));
         assert_ne!(id, other);
-        assert!(Store::open(&root, 106).unwrap().approve(&id).is_err());
+        assert!(Store::open(&root, 103 + SIBLING_SECONDS + 1)
+            .unwrap()
+            .approve(&id)
+            .is_err());
     }
 
     #[test]
@@ -450,7 +498,14 @@ mod tests {
             output(&input, &ask(), &root, 104).is_empty(),
             "the retry runs once"
         );
-        assert_ne!(request_id(&output(&input, &ask(), &root, 105)), id);
+        assert!(
+            output(&input, &ask(), &root, 105).is_empty(),
+            "the other hook of that attempt is the same grant"
+        );
+        assert_ne!(
+            request_id(&output(&input, &ask(), &root, 104 + SIBLING_SECONDS)),
+            id
+        );
     }
 
     #[test]

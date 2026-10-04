@@ -2,6 +2,10 @@
 
 Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
+## Unreleased
+
+- A grant spent by one hook allows the other hook of that same attempt for five seconds. A later attempt asks again.
+
 ## 0.24.3 (2026-10-04)
 
 - `ljos doctor` has a `policy` row: the ljos-policyd version and whether it judges with phronesis after its built-in table, or with the table alone; without the binary, it says commands are judged only by seat rules.
