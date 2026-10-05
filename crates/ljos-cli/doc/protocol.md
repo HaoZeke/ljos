@@ -150,7 +150,9 @@ Every piece of work has an issue before it has a claim.
   far neighbors still sit from each other. Both zero with one option means
   there was one option. Act on the shares when polarization is about zero
   and two or more options were named. When polarization is away from zero,
-  the mean is not a position the group reached. A tally printed later is
+  the mean is not a position the group reached, and the settle files a
+  child for each option a voter still leads with that is not the unique
+  plurality. A tally printed later is
   who voted. On a hard question the ballot carries the private forecast
   of the others, `ljos vote ISSUE --for OPTION --expect OPTION`; `ljos predict`
   still records one on its own. With two or more forecasts
