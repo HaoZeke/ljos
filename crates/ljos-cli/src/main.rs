@@ -1129,6 +1129,14 @@ fn main() -> Result<()> {
                         })
                         .flatten();
                     let (mut ctx, ids) = hook_note(&call, limit);
+                    if call.event == "UserPromptSubmit" && ljos_cli::asks_decision(&call.cue) {
+                        let line = ljos_cli::decision_hold();
+                        ctx = if ctx.is_empty() {
+                            line
+                        } else {
+                            format!("{line}\n{ctx}")
+                        };
+                    }
                     if let Some(granted) = granted {
                         ctx = if ctx.is_empty() {
                             granted

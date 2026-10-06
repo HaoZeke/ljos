@@ -5,7 +5,9 @@ Grok discards ``UserPromptSubmit`` stdout. It delivers ``PostToolUse``
 prompt, holds the text, and emits it once on ``PostToolUse``.
 A conversation that holds no issue is told, on that first result, to
 file one and sit. ``Stop`` holds such a turn once when it used tools and
-never touched the seat. ``PreToolUse`` is TCB and pack rules; a deny
+never touched the seat. A prompt that asks which answer is right is
+told, on that same result, not to pick until a panel has voted, and
+``Stop`` holds the turn once if it picks with no ballot. ``PreToolUse`` is TCB and pack rules; a deny
 blocks. There is no ``sync.sh``.
 
 Install

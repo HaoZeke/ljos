@@ -3058,6 +3058,8 @@ pub struct StopTurn {
     pub used_tool: bool,
     /// A tool after that request named the seat.
     pub touched_seat: bool,
+    /// The turn ran a sitting, a panel, a ballot, or a settle.
+    pub balloted: bool,
 }
 
 fn tail_chars(s: &str, n: usize) -> String {
@@ -3122,16 +3124,62 @@ fn is_user_prompt(e: &Value) -> bool {
 }
 
 /// A tool call the transcript names at the top level: `name` and `arguments`.
+/// Whether the person's words ask for a choice rather than a change.
+#[must_use]
+pub fn asks_decision(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    const CUES: &[&str] = &[
+        "what do we think",
+        "right answer",
+        "most elegant",
+        "sit a panel",
+        "which is right",
+    ];
+    CUES.iter().any(|cue| lower.contains(cue))
+}
+
+/// The line a decision gets before anyone picks.
+#[must_use]
+pub fn decision_hold() -> String {
+    "This prompt is a decision. Do not pick an answer until a panel has voted. \
+     On this machine, `ljos sitting ID` writes the briefs when the issue is a decision; \
+     one `ljos vote ID --for OPTION --expect OPTION --as NAME` per brief, then \
+     `ljos consensus ID`."
+        .into()
+}
+
+fn note_ballot(turn: &mut StopTurn, text: &str) {
+    let lower = text.to_ascii_lowercase();
+    if [
+        "ljos vote",
+        "ljos_vote",
+        "ljos sitting",
+        "ljos_sitting",
+        "ljos consensus",
+        "ljos_consensus",
+        "ljos panel",
+        "ljos_panel",
+    ]
+    .iter()
+    .any(|cue| lower.contains(cue))
+    {
+        turn.balloted = true;
+    }
+}
+
 fn record_tool_call(turn: &mut StopTurn, name: &str, arguments: &str) {
     turn.used_tool = true;
-    if touches_seat(&format!("{name} {arguments}")) {
+    let cue = format!("{name} {arguments}");
+    if touches_seat(&cue) {
         turn.touched_seat = true;
     }
+    note_ballot(turn, &cue);
     let Ok(args) = serde_json::from_str::<Value>(arguments) else {
         return;
     };
     if let Some(cmd) = args["command"].as_str() {
         let cmd: String = cmd.chars().take(200).collect();
+        note_ballot(turn, &cmd);
         turn.test_ran |= runs_tests(&cmd);
         turn.commands.push(cmd);
     }
@@ -3174,9 +3222,11 @@ pub fn stop_turn_from_transcript(text: &str) -> StopTurn {
                     turn.used_tool = true;
                     let name = part["name"].as_str().unwrap_or("");
                     let cmd = part["input"]["command"].as_str().unwrap_or("");
-                    if touches_seat(&format!("{name} {cmd}")) {
+                    let cue = format!("{name} {cmd}");
+                    if touches_seat(&cue) {
                         turn.touched_seat = true;
                     }
+                    note_ballot(&mut turn, &cue);
                     if let Some(cmd) = part["input"]["command"].as_str() {
                         let cmd: String = cmd.chars().take(200).collect();
                         if let Some(id) = part["id"].as_str() {
@@ -3261,16 +3311,14 @@ pub fn stop_audit(input: &str, stop_active: bool) -> Option<String> {
     jev::audit_reason(&a, turn.test_ran)
 }
 
-/// Why a turn that used tools and holds no issue is held for one more
-/// round. A subagent is left to its brief. A turn that already touched
-/// the seat, or a conversation that already holds an issue, stops.
-/// `None` lets the turn end. The second stop of the same turn is not held.
+/// Why a turn is held for one more round. A decision that has not been
+/// sat is held even when an issue is already open. A conversation that
+/// holds no issue and used tools without touching the seat is held too.
+/// A subagent is left to its brief. The second stop of the same turn is
+/// not held. `None` lets the turn end.
 #[must_use]
 pub fn seat_stop_reason(input: &str, stop_active: bool, subagent: bool) -> Option<String> {
     if stop_active || subagent {
-        return None;
-    }
-    if held_issue().is_some() {
         return None;
     }
     let v: Value = serde_json::from_str(input.trim()).ok()?;
@@ -3280,7 +3328,10 @@ pub fn seat_stop_reason(input: &str, stop_active: bool, subagent: bool) -> Optio
     let turn = std::fs::read_to_string(path)
         .ok()
         .map(|t| stop_turn_from_transcript(&t))?;
-    if !turn.used_tool || turn.touched_seat {
+    if asks_decision(&turn.request) && !turn.balloted {
+        return Some(decision_hold());
+    }
+    if held_issue().is_some() || !turn.used_tool || turn.touched_seat {
         return None;
     }
     Some(
@@ -15609,6 +15660,44 @@ mod tests {
         )
         .unwrap();
         assert!(seat_stop_reason(&input, false, false).is_none());
+        unsafe { std::env::remove_var("LJOS_IN_HOOK") };
+        unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
+    }
+
+    #[test]
+    fn a_design_question_is_held_until_a_panel_votes() {
+        let _g = env_guard();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", dir.path()) };
+        unsafe { std::env::set_var("LJOS_IN_HOOK", "1") };
+        let transcript = dir.path().join("chat.jsonl");
+        std::fs::write(
+            &transcript,
+            "{\"type\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"so what do we think? is this the most elegant / right answer?\"}]}\n\
+             {\"type\":\"assistant\",\"content\":\"\",\"tool_calls\":[{\"name\":\"grep\",\"arguments\":\"{\\\"pattern\\\":\\\"comment\\\"}\"}]}\n\
+             {\"type\":\"assistant\",\"content\":\"Pull request 314 is the right small change.\"}\n",
+        )
+        .unwrap();
+        let input = format!(
+            r#"{{"transcriptPath":"{}","stopHookActive":false}}"#,
+            transcript.display()
+        );
+        let reason = seat_stop_reason(&input, false, false).expect("a decision is held");
+        assert!(reason.contains("ljos consensus"), "{reason}");
+        assert!(asks_decision(
+            "so what do we think? is this the most elegant / right answer?"
+        ));
+        assert!(!asks_decision("fix the parser and test it"));
+        std::fs::write(
+            &transcript,
+            "{\"type\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"so what do we think? is this the most elegant / right answer?\"}]}\n\
+             {\"type\":\"assistant\",\"content\":\"\",\"tool_calls\":[{\"name\":\"run_terminal_command\",\"arguments\":\"{\\\"command\\\":\\\"ljos vote ljos-ig07 --for D --as operator\\\"}\"}]}\n",
+        )
+        .unwrap();
+        assert!(
+            seat_stop_reason(&input, false, false).is_none(),
+            "a ballot lets the turn end"
+        );
         unsafe { std::env::remove_var("LJOS_IN_HOOK") };
         unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
     }
