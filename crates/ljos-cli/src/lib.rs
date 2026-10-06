@@ -3138,14 +3138,289 @@ pub fn asks_decision(text: &str) -> bool {
     CUES.iter().any(|cue| lower.contains(cue))
 }
 
-/// The line a decision gets before anyone picks.
+/// The line a decision gets before anyone picks, when the host could not
+/// start the panel itself.
 #[must_use]
 pub fn decision_hold() -> String {
     "This prompt is a decision. Do not pick an answer until a panel has voted. \
      On this machine, `ljos sitting ID` writes the briefs when the issue is a decision; \
      one `ljos vote ID --for OPTION --expect OPTION --as NAME` per brief, then \
-     `ljos consensus ID`."
+     `ljos consensus ID`. Do not ssh to another host to sit."
         .into()
+}
+
+/// What one panel member is asked, after its brief. It votes as itself and
+/// stops. It does not sit, edit, or leave the machine.
+#[must_use]
+pub fn decision_member_task(brief: &str, persona: &str, issue: &str) -> String {
+    format!(
+        "{brief}\n\nYou are {persona}. Cast exactly one ballot on {issue} and stop. \
+         Read the issue, then `ljos vote {issue} --for OPTION --expect OPTION --as {persona} \
+         --confidence 0.7 --used none`. OPTION is one of the issue's options. \
+         Do not open a sitting, edit files, push, or ssh."
+    )
+}
+
+/// Fork the panel opener and return at once. The opener files or reuses the
+/// decision, writes the briefs, and starts one headless member per persona.
+/// A second call for the same prompt in this session does not fork again.
+/// A panel member (`LJOS_PANEL_CHILD`) does not fork one of its own.
+///
+/// # Errors
+///
+/// The runtime directory cannot be written, or the opener did not start.
+pub fn start_decision_panel(
+    prompt: &str,
+    session: Option<&str>,
+    cwd: Option<&str>,
+) -> Result<String> {
+    if std::env::var_os("LJOS_PANEL_CHILD").is_some() {
+        return Ok(decision_hold());
+    }
+    let key: String = prompt.chars().take(80).collect();
+    let seen_key = format!("panel-open:{key}");
+    if seen_ids(session).contains(&seen_key) {
+        return Ok(
+            "A panel is already opening for this question. Do not pick an answer and do not ssh."
+                .into(),
+        );
+    }
+    let dir = runtime_dir();
+    std::fs::create_dir_all(&dir)?;
+    let stamp = std::process::id();
+    let prompt_file = dir.join(format!("panel-prompt-{stamp}.txt"));
+    let log = dir.join(format!("panel-open-{stamp}.log"));
+    std::fs::write(&prompt_file, prompt)?;
+    let bin = std::env::var("LJOS_PANEL_BIN").unwrap_or_else(|_| {
+        std::env::current_exe()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "ljos".into())
+    });
+    let mut args = vec![
+        "open-panel".to_string(),
+        "--prompt-file".into(),
+        prompt_file.display().to_string(),
+        "--log".into(),
+        log.display().to_string(),
+    ];
+    if let Some(cwd) = cwd {
+        args.push("--cwd".into());
+        args.push(cwd.to_string());
+    }
+    if let Some(session) = session {
+        args.push("--session".into());
+        args.push(session.to_string());
+    }
+    detach(&bin, &args, &log)?;
+    mark_seen(session, &[seen_key]);
+    Ok(format!(
+        "A panel is opening for this decision. Do not pick an answer and do not ssh. \
+         The opener log is {}.",
+        log.display()
+    ))
+}
+
+/// Start `bin` with `args` in its own session, writing stdout and stderr to
+/// `log`. `setsid --fork` when it is on `PATH`, otherwise a spawned child.
+fn detach(bin: &str, args: &[String], log: &Path) -> Result<()> {
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log)
+        .with_context(|| format!("panel log {}", log.display()))?;
+    let err = file.try_clone()?;
+    if which::which("setsid").is_ok() {
+        let mut cmd = std::process::Command::new("setsid");
+        cmd.arg("--fork").arg(bin).args(args);
+        cmd.stdin(std::process::Stdio::null())
+            .stdout(file)
+            .stderr(err);
+        cmd.spawn().context("setsid --fork the panel opener")?;
+        return Ok(());
+    }
+    let mut cmd = std::process::Command::new(bin);
+    cmd.args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(file)
+        .stderr(err);
+    cmd.spawn().context("spawn the panel opener")?;
+    Ok(())
+}
+
+/// The argv of one headless panel member. `LJOS_PANEL_BIN` names the
+/// stand-in used in tests; otherwise `grok`.
+#[must_use]
+pub fn panel_member_argv(prompt_file: &Path, cwd: Option<&str>) -> Vec<String> {
+    let bin = std::env::var("LJOS_MEMBER_BIN").unwrap_or_else(|_| "grok".into());
+    let mut args = vec![
+        bin,
+        "--prompt-file".into(),
+        prompt_file.display().to_string(),
+        "--yolo".into(),
+        "--max-turns".into(),
+        "6".into(),
+        "--effort".into(),
+        "low".into(),
+        "--disallowed-tools".into(),
+        "Agent".into(),
+    ];
+    if let Some(cwd) = cwd.filter(|c| !c.is_empty()) {
+        args.push("--cwd".into());
+        args.push(cwd.to_string());
+    }
+    args
+}
+
+/// File a yes-or-no decision for `prompt` when nothing open is already one,
+/// sit it, write the briefs, and start one headless member per persona.
+/// The opener's own log is `log`.
+///
+/// # Errors
+///
+/// No project can be named, the tracker refuses the issue, or a member
+/// cannot be started.
+pub fn open_decision_panel(prompt: &str, cwd: Option<&str>, log: &Path) -> Result<String> {
+    let _ = std::fs::create_dir_all(log.parent().unwrap_or(log));
+    let issue = decision_issue_for(prompt)?;
+    append_log(log, &format!("issue {issue}\n"));
+    let cards = std::path::PathBuf::from(".");
+    let sat = sitting_gated(
+        &issue,
+        &resolve_assignee(None),
+        &cards,
+        true,
+        Some("company-panel"),
+    )?;
+    append_log(log, &sat);
+    let briefs = runtime_dir().join(format!("panel-{issue}"));
+    let wrote = panel(&issue, &briefs)?;
+    append_log(log, &wrote);
+    let mut n = 0;
+    for path in std::fs::read_dir(&briefs)
+        .with_context(|| format!("read {}", briefs.display()))?
+        .flatten()
+    {
+        let path = path.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            continue;
+        }
+        let persona = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("member")
+            .to_string();
+        let brief = std::fs::read_to_string(&path)?;
+        let task = decision_member_task(&brief, &persona, &issue);
+        let task_file = briefs.join(format!("{persona}.prompt"));
+        std::fs::write(&task_file, task)?;
+        let argv = panel_member_argv(&task_file, cwd);
+        let member_log = briefs.join(format!("{persona}.log"));
+        spawn_member(&argv, &member_log)?;
+        n += 1;
+    }
+    let line = format!("opened {n} members on {issue}\n");
+    append_log(log, &line);
+    Ok(line)
+}
+
+fn append_log(log: &Path, text: &str) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log)
+    {
+        use std::io::Write;
+        let _ = f.write_all(text.as_bytes());
+    }
+}
+
+fn decision_issue_for(prompt: &str) -> Result<String> {
+    if let Some(id) = held_issue() {
+        if tracker_show_json(&id).is_ok_and(|v| is_decision(&v)) {
+            return Ok(id);
+        }
+        return file_yes_no(Some(&id), prompt);
+    }
+    file_yes_no(None, prompt)
+}
+
+fn file_yes_no(parent: Option<&str>, prompt: &str) -> Result<String> {
+    let project = parent
+        .and_then(|id| id.rsplit_once('-').map(|(p, _)| p.to_string()))
+        .or_else(|| std::env::var("LJOS_PROJECT").ok().filter(|p| !p.is_empty()));
+    let Some(project) = project else {
+        bail!("no held issue and LJOS_PROJECT is unset, so no decision was filed");
+    };
+    let title: String = prompt
+        .split_whitespace()
+        .take(12)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let title: String = title.chars().take(80).collect();
+    let body = format!(
+        "Options: A, B\n\nA: this is the right answer\nB: this is not the right answer\n\nThe question:\n{prompt}\n"
+    );
+    let mut argv = vec![
+        "create".to_string(),
+        "-p".into(),
+        project,
+        "-t".into(),
+        "decision".into(),
+    ];
+    if let Some(parent) = parent {
+        argv.push("--parent".into());
+        argv.push(parent.to_string());
+    }
+    argv.push("--body".into());
+    argv.push(body);
+    argv.push("--tags".into());
+    argv.push("decision,panel".into());
+    argv.push(title);
+    let out = std::process::Command::new(which::which("vissue").context("vissue not on PATH")?)
+        .args(&argv)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .context("vissue create")?;
+    if !out.status.success() {
+        bail!(
+            "vissue create: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let id = text.split_whitespace().next().unwrap_or("").to_string();
+    if id.is_empty() {
+        bail!("vissue create printed no id");
+    }
+    let _ = persist_tracker(&id, "filed a decision for a panel");
+    Ok(id)
+}
+
+fn spawn_member(argv: &[String], log: &Path) -> Result<()> {
+    if argv.is_empty() {
+        bail!("panel member has no argv");
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log)?;
+    let err = file.try_clone()?;
+    let mut cmd = if which::which("setsid").is_ok() {
+        let mut c = std::process::Command::new("setsid");
+        c.arg("--fork").args(argv);
+        c
+    } else {
+        let mut c = std::process::Command::new(&argv[0]);
+        c.args(&argv[1..]);
+        c
+    };
+    cmd.env("LJOS_PANEL_CHILD", "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(file)
+        .stderr(err)
+        .spawn()
+        .with_context(|| format!("start {}", argv[0]))?;
+    Ok(())
 }
 
 fn note_ballot(turn: &mut StopTurn, text: &str) {
@@ -15698,6 +15973,45 @@ mod tests {
             seat_stop_reason(&input, false, false).is_none(),
             "a ballot lets the turn end"
         );
+        let task = decision_member_task("brief", "operator", "ljos-ig07");
+        assert!(task.contains("ljos vote ljos-ig07"));
+        assert!(task.contains("Do not open a sitting"));
+        unsafe { std::env::set_var("LJOS_PANEL_CHILD", "1") };
+        let child = start_decision_panel(
+            "so what do we think? is this the right answer?",
+            Some("sess-child"),
+            None,
+        )
+        .unwrap();
+        assert!(child.contains("Do not ssh"), "{child}");
+        unsafe { std::env::remove_var("LJOS_PANEL_CHILD") };
+        let opener = dir.path().join("opener.sh");
+        std::fs::write(
+            &opener,
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$LJOS_TEST_ARGV\"\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&opener, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let argv_path = dir.path().join("argv.txt");
+        unsafe { std::env::set_var("LJOS_PANEL_BIN", &opener) };
+        unsafe { std::env::set_var("LJOS_TEST_ARGV", &argv_path) };
+        let said = start_decision_panel(
+            "so what do we think? is this the right answer?",
+            Some("sess-open"),
+            Some(dir.path().to_str().unwrap()),
+        )
+        .unwrap();
+        assert!(said.contains("panel is opening"), "{said}");
+        let argv = (0..20)
+            .find_map(|_| {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                std::fs::read_to_string(&argv_path).ok()
+            })
+            .unwrap_or_default();
+        assert!(argv.contains("open-panel"), "{argv}");
+        unsafe { std::env::remove_var("LJOS_PANEL_BIN") };
+        unsafe { std::env::remove_var("LJOS_TEST_ARGV") };
         unsafe { std::env::remove_var("LJOS_IN_HOOK") };
         unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
     }

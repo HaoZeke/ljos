@@ -153,6 +153,21 @@ enum Cmd {
         #[arg(long)]
         body: Option<String>,
     },
+    /// Open a panel for a decision prompt: file or reuse the issue, sit it, and start one headless member per brief.
+    OpenPanel {
+        /// The prompt, already written to a file so the hook can return.
+        #[arg(long)]
+        prompt_file: PathBuf,
+        /// Where the opener writes what it did.
+        #[arg(long)]
+        log: PathBuf,
+        /// The repository the members read.
+        #[arg(long)]
+        cwd: Option<String>,
+        /// The conversation that asked, so a second opener is not a second panel.
+        #[arg(long)]
+        session: Option<String>,
+    },
     /// Note progress on an issue, dated, and commit the tracker.
     Note {
         issue: String,
@@ -663,6 +678,19 @@ fn main() -> Result<()> {
                 print!("{}", ljos_cli::persist_tracker(&issue, "cited a deed"));
             }
         }
+        Cmd::OpenPanel {
+            prompt_file,
+            log,
+            cwd,
+            session: _,
+        } => {
+            let prompt = std::fs::read_to_string(&prompt_file)
+                .with_context(|| format!("read {}", prompt_file.display()))?;
+            print!(
+                "{}",
+                ljos_cli::open_decision_panel(&prompt, cwd.as_deref(), &log)?
+            );
+        }
         Cmd::File {
             title,
             parent,
@@ -1130,7 +1158,14 @@ fn main() -> Result<()> {
                         .flatten();
                     let (mut ctx, ids) = hook_note(&call, limit);
                     if call.event == "UserPromptSubmit" && ljos_cli::asks_decision(&call.cue) {
-                        let line = ljos_cli::decision_hold();
+                        let line = ljos_cli::start_decision_panel(
+                            &call.cue,
+                            call.session.as_deref(),
+                            cwd.as_ref().ok().and_then(|p| p.to_str()),
+                        )
+                        .unwrap_or_else(|e| {
+                            format!("{}\npanel did not open: {e:#}", ljos_cli::decision_hold())
+                        });
                         ctx = if ctx.is_empty() {
                             line
                         } else {
