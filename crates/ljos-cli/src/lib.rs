@@ -3827,8 +3827,7 @@ pub fn held_issue() -> Option<String> {
     }
     // The hold records answer in milliseconds; the tracker walk below takes
     // seconds on a large tracker, past what a runner lets a hook run.
-    let nodes = held_nodes(&holders);
-    if let Some(node) = nodes.into_iter().next() {
+    if let Some(node) = held_from_records(&holders) {
         return Some(node);
     }
     if std::env::var_os("LJOS_IN_HOOK").is_some() {
