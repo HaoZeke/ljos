@@ -1,7 +1,7 @@
 ---
 name: ljos
 description: >
-  The seat protocol for vissue, packset, deedar, claimdag and consensus through ljos: which store answers which question, the order of verbs in a sitting, and the refusals worth knowing. Load before any work that touches an issue, a memory, a deed, a claim or a vote.
+  The seat protocol for vissue, packset, deedar, claimdag and consensus through ljos. On a runner that hides MCP tools, the pack is use_tool ljos__ljos_search, ljos__ljos_remember, and ljos__ljos_prefer. Search the pack before answering from memory. Load before any work that touches an issue, a memory, a deed, a claim or a vote.
 ---
 
 # The seat protocol

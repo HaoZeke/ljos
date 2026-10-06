@@ -1156,7 +1156,20 @@ fn main() -> Result<()> {
                             )
                         })
                         .flatten();
+                    if call.event == "UserPromptSubmit" {
+                        ljos_cli::store_correction(&call);
+                    }
                     let (mut ctx, ids) = hook_note(&call, limit);
+                    if call.shape == ljos_cli::HookShape::CamelCase
+                        && call.event == "UserPromptSubmit"
+                    {
+                        let line = ljos_cli::GROK_PACK_LINE;
+                        ctx = if ctx.is_empty() {
+                            line.to_string()
+                        } else {
+                            format!("{line}\n{ctx}")
+                        };
+                    }
                     if call.event == "UserPromptSubmit" && ljos_cli::asks_decision(&call.cue) {
                         let line = ljos_cli::start_decision_panel(
                             &call.cue,

@@ -10,6 +10,10 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 - Grok Build receives an ask rule as `ask` on `decision` and `permissionDecision`, and shows its in-chat permission prompt. A runner that cannot ask still has the ask rewritten to a deny, with a one-use request id.
 - Claude Code installs the seat from the leidarljos marketplace in this repository. `claude plugin marketplace add leidarljos/ljos`, then `claude plugin install ljos@leidarljos` for the MCP server, the seat protocol skill, the sitting and finish commands, and the hooks `ljos onboard --harness claude` registers. `claude plugin install vissue@leidarljos` fetches the tracker server from leidarljos/vissue.
 
+## 0.25.4 (2026-10-06)
+
+- A correction is written into the pack by the hook. On the runner whose pack tools sit behind a search step, the prompt note names `ljos__ljos_search`, `ljos__ljos_remember`, and `ljos__ljos_prefer`.
+
 ## 0.25.3 (2026-10-06)
 
 - A company panel names no model. The brief says to run each member on this same runner and not to set a model id. A spawn hint is not a model the runner can call.

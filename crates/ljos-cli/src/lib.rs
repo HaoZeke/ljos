@@ -31,9 +31,10 @@ pub const PROTOCOL: &str = include_str!("../doc/protocol.md");
 pub fn skill_text() -> String {
     format!(
         "---\nname: ljos\ndescription: >\n  The seat protocol for vissue, packset, deedar, claimdag and \
-consensus through ljos: which store answers which question, the order of verbs in a \
-sitting, and the refusals worth knowing. Load before any work that touches an issue, \
-a memory, a deed, a claim or a vote.\n---\n\n{PROTOCOL}"
+consensus through ljos. On a runner that hides MCP tools, the pack is use_tool \
+ljos__ljos_search, ljos__ljos_remember, and ljos__ljos_prefer. Search the pack \
+before answering from memory. Load before any work that touches an issue, a memory, \
+a deed, a claim or a vote.\n---\n\n{PROTOCOL}"
     )
 }
 
@@ -3988,6 +3989,8 @@ pub const CORRECTION_CUES: &[&str] = &[
     "still not",
     "not even able",
     "you never",
+    "no one ever",
+    "never use",
     "you keep",
 ];
 
@@ -4026,6 +4029,50 @@ fn correction_nudge_as(call: &HookCall, verdict: Option<bool>) -> Option<(String
             .to_string(),
     ))
 }
+
+/// The first cue in [`CORRECTION_CUES`] that `text` contains.
+#[must_use]
+pub fn correction_cue(text: &str) -> Option<&'static str> {
+    let lower = text.to_lowercase();
+    CORRECTION_CUES
+        .iter()
+        .find(|c| lower.contains(*c))
+        .copied()
+}
+
+/// Write a correction into the pack. The model on a runner whose pack
+/// tools are behind a search step does not, and the hook already decided
+/// the prompt is a correction. Once per session per cue. A pack that does
+/// not answer is left for the note.
+pub fn store_correction(call: &HookCall) {
+    if call.event != "UserPromptSubmit" {
+        return;
+    }
+    let Some(hit) = correction_cue(&call.cue) else {
+        return;
+    };
+    let key = format!("correction-stored:{hit}");
+    if seen_ids(call.session.as_deref()).contains(&key) {
+        return;
+    }
+    let text: String = call.cue.trim().chars().take(400).collect();
+    if text.len() < 12 {
+        return;
+    }
+    let wrote = with_pack_timeout(1500, || {
+        packset_write_as("Prefer", &text, None, Some(false)).is_ok()
+    });
+    if wrote {
+        mark_seen(call.session.as_deref(), &[key]);
+    }
+}
+
+/// How this runner calls the pack. Its tools are not in the built-in list.
+pub const GROK_PACK_LINE: &str = "\
+The pack is packset, through use_tool, with no search_tool call first: \
+ljos__ljos_search {\"query\": \"...\"}, ljos__ljos_remember {\"text\": \"...\"}, \
+ljos__ljos_prefer {\"text\": \"...\"}. Search it before answering from memory. \
+A lesson is remember. A standing choice is prefer.";
 
 /// The note for a prompt Jev judged to carry instructions the person did not
 /// write: quoted logs, pages, issues or files that address the agent. Keyed
@@ -15953,6 +16000,17 @@ mod tests {
         assert!(seat_stop_reason(&input, false, false).is_none());
         unsafe { std::env::remove_var("LJOS_IN_HOOK") };
         unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
+    }
+
+    #[test]
+    fn a_complaint_that_nobody_uses_the_pack_is_a_correction() {
+        assert_eq!(
+            correction_cue("and no one ever seems to use packset here"),
+            Some("no one ever")
+        );
+        assert_eq!(correction_cue("fix the parser"), None);
+        assert!(GROK_PACK_LINE.contains("ljos__ljos_search"));
+        assert!(GROK_PACK_LINE.contains("ljos__ljos_prefer"));
     }
 
     #[test]
