@@ -3262,9 +3262,9 @@ pub fn limit_stop(input: &str, session: Option<&str>) -> Option<String> {
     ))
 }
 
-/// Tool calls a conversation may make without a word to the seat before the
-/// hook reminds it. A sitting opened at the start and nothing after it is
-/// how long work went unrecorded.
+/// Tool calls a conversation that already holds an issue may make without a
+/// word to the seat before the hook reminds it. A conversation that holds
+/// none is told on the first result.
 pub const WORK_NUDGE_EVERY: u64 = 40;
 
 /// Whether a hook call's cue is the seat's own verbs or tools.
@@ -3274,10 +3274,10 @@ pub fn touches_seat(cue: &str) -> bool {
         .any(|w| w == "ljos" || w == "vissue" || w.starts_with("ljos_") || w.starts_with("vissue_"))
 }
 
-/// Count this conversation's tool calls since it last touched the seat, and
-/// on a `PostToolUse` that reaches [`WORK_NUDGE_EVERY`] say what to record:
-/// a note, a lesson or a deed on the issue it holds, or an issue to open
-/// when it holds none. A subagent is left to its brief.
+/// Count this conversation's tool calls since it last touched the seat.
+/// With no issue held, the first `PostToolUse` of a stretch says to file
+/// one and sit. With an issue held, a `PostToolUse` that reaches
+/// [`WORK_NUDGE_EVERY`] says what to record. A subagent is left to its brief.
 pub fn work_nudge(call: &HookCall, subagent: bool) -> Option<String> {
     let session = call.session.as_deref()?;
     let safe: String = session
@@ -3289,6 +3289,7 @@ pub fn work_nudge(call: &HookCall, subagent: bool) -> Option<String> {
     }
     let path = runtime_dir().join(format!("work-{safe}"));
     if touches_seat(&call.cue) {
+        let _ = std::fs::create_dir_all(runtime_dir());
         let _ = std::fs::write(&path, "0");
         return None;
     }
@@ -3300,13 +3301,22 @@ pub fn work_nudge(call: &HookCall, subagent: bool) -> Option<String> {
         .and_then(|t| t.trim().parse::<u64>().ok())
         .unwrap_or(0)
         + 1;
-    if count < WORK_NUDGE_EVERY {
+    let held = held_issue();
+    let due = match &held {
+        None => count == 1 || count >= WORK_NUDGE_EVERY,
+        Some(_) => count >= WORK_NUDGE_EVERY,
+    };
+    if !due {
         let _ = std::fs::create_dir_all(runtime_dir());
         let _ = std::fs::write(&path, count.to_string());
         return None;
     }
-    let _ = std::fs::write(&path, "0");
-    Some(match held_issue() {
+    // The open-issue line is the first result. Keeping 1 leaves the calls
+    // after it inside the stretch, so the line does not repeat on each one.
+    let stored = if held.is_none() && count == 1 { 1 } else { 0 };
+    let _ = std::fs::create_dir_all(runtime_dir());
+    let _ = std::fs::write(&path, stored.to_string());
+    Some(match held {
         Some(issue) => format!(
             "{count} tool calls on {issue} since the seat last heard from this conversation. \
              Record what the work has shown: progress is `ljos note {issue} \"...\"`, a lesson \
@@ -3314,7 +3324,7 @@ pub fn work_nudge(call: &HookCall, subagent: bool) -> Option<String> {
              --add ACCESSION`; the work closes with `ljos finish {issue} --lesson \"...\"`."
         ),
         None => format!(
-            "{count} tool calls in this conversation with no issue held. Work goes on an issue: \
+            "This conversation holds no issue. Work goes on an issue: \
              `ljos file \"TITLE\" -p PROJECT --top` prints an id, then `ljos sitting ID` opens it."
         ),
     })
@@ -14104,29 +14114,35 @@ mod tests {
     }
 
     #[test]
-    fn a_long_run_without_the_seat_is_reminded_once_per_stretch() {
+    fn an_open_conversation_is_told_to_sit_on_the_first_result() {
         let _g = env_guard();
         let dir = tempfile::tempdir().unwrap();
         unsafe { std::env::set_var("XDG_RUNTIME_DIR", dir.path()) };
+        unsafe { std::env::set_var("LJOS_IN_HOOK", "1") };
         let call = |cue: &str, event: &str| HookCall {
             event: event.into(),
             cue: cue.into(),
             session: Some("work-test".into()),
             shape: HookShape::Asks,
         };
-        for _ in 1..WORK_NUDGE_EVERY {
-            assert!(work_nudge(&call("cargo test", "PostToolUse"), false).is_none());
-        }
-        let said =
-            work_nudge(&call("cargo test", "PostToolUse"), false).expect("nudged at the count");
+        let said = work_nudge(&call("cargo test", "PostToolUse"), false)
+            .expect("the first result with no issue says to sit");
         assert!(
-            said.contains("no issue held") || said.contains("ljos note"),
+            said.contains("holds no issue") && said.contains("ljos sitting"),
             "{said}"
         );
-        assert!(
-            work_nudge(&call("cargo test", "PostToolUse"), false).is_none(),
-            "count starts over"
-        );
+        for _ in 2..WORK_NUDGE_EVERY {
+            assert!(
+                work_nudge(&call("cargo test", "PostToolUse"), false).is_none(),
+                "the calls after the first stay inside the stretch"
+            );
+        }
+        let again = work_nudge(&call("cargo test", "PostToolUse"), false)
+            .expect("the end of the stretch says so again");
+        assert!(again.contains("ljos sitting"), "{again}");
+        let fresh = work_nudge(&call("cargo test", "PostToolUse"), false)
+            .expect("a new stretch opens on the next result");
+        assert!(fresh.contains("ljos sitting"), "{fresh}");
         assert!(work_nudge(&call("ljos remember x", "PreToolUse"), false).is_none());
         assert!(
             work_nudge(&call("rg foo", "PostToolUse"), true).is_none(),
@@ -14134,6 +14150,7 @@ mod tests {
         );
         assert!(touches_seat("use_tool ljos__ljos_sitting"));
         assert!(!touches_seat("cargo build --release"));
+        unsafe { std::env::remove_var("LJOS_IN_HOOK") };
         unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
     }
 

@@ -4,6 +4,7 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
+- A conversation that holds no issue is told to file one and sit on the first tool result. A conversation that already holds an issue still waits forty tool calls before the reminder to record the work.
 - An ask a runner cannot show as its own prompt is granted by the client's consent form (`ljos_request_approval`), by replying `approve ID` in the same conversation, or by `ljos approve ID` in a terminal.
 - A background tracker push stays visible to doctor after ljos exits. The log name remains the ljos pid. The push shell pid is written beside it, and the row stays healthy while that shell or a git child of it is alive.
 - An ignored tracker file is reported with the ignore rule that keeps it out of the commit. A clean tracked file still reports nothing to commit.
