@@ -5308,7 +5308,7 @@ A panel of personas on one bound recipe.
 1. Bind `company-panel` before any persona enters. `ljos panel` refuses if none is bound.
 2. Every persona has one unscoped inbound trust row; `--about` only adds weight.
 3. `ljos brief NAME ISSUE` reprints this recipe in full, the five named principles, and the arena rubric.
-4. One subagent per persona, optional model-family spawn hints. Each casts `ljos vote ISSUE --for OPTION --expect OPTION --as NAME`. `--expect` is the private forecast of the others, for the surprisingly popular reading. Then `ljos consensus ISSUE`.
+4. One subagent per persona, on this same runner. Do not set a model id. A spawn hint is not a model this runner can call. Each casts `ljos vote ISSUE --for OPTION --expect OPTION --as NAME`. `--expect` is the private forecast of the others, for the surprisingly popular reading. Then `ljos consensus ISSUE`.
 5. Do not resume across phases. A new task is a new sitting.
 ";
 
@@ -5344,7 +5344,7 @@ pub fn shipped_playbooks() -> Vec<Playbook> {
         Playbook {
             name: "company-panel".into(),
             body: COMPANY_PANEL_BODY.trim().into(),
-            models: vec!["judgment".into(), "instruction".into()],
+            models: Vec::new(),
         },
         Playbook {
             name: "overnight".into(),
@@ -5549,6 +5549,9 @@ pub fn format_playbook_copy(p: &Playbook) -> String {
         out.push_str(&p.models.join(", "));
         out.push_str("; each subagent still ends with `ljos vote --as` then `ljos consensus`.\n");
     }
+    out.push_str(
+        "Runner: this same runner. Do not set a model id. A spawn hint is not a model this runner can call.\n",
+    );
     out
 }
 
@@ -15606,6 +15609,19 @@ mod tests {
         assert!(
             COMPANY_PANEL_BODY.contains("--expect"),
             "a panel ballot carries the private forecast: {COMPANY_PANEL_BODY}"
+        );
+        let panel_pb = shipped_playbooks()
+            .into_iter()
+            .find(|p| p.name == "company-panel")
+            .unwrap();
+        let panel = format_playbook_copy(&panel_pb);
+        assert!(
+            panel.contains("Do not set a model id"),
+            "{panel}"
+        );
+        assert!(
+            !panel.contains("spawn hints"),
+            "a company panel names no model family: {panel}"
         );
         match before {
             Some(v) => unsafe { std::env::set_var("XDG_RUNTIME_DIR", v) },
