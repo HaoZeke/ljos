@@ -1005,14 +1005,21 @@ fn main() -> Result<()> {
                 let key = format!("subagent-gate:{agent}");
                 let seen = ljos_cli::seen_ids(call.session.as_deref());
                 if !seen.contains(&key) {
-                    let issue = ljos_cli::held_issue();
-                    let decision = issue.as_deref().is_some_and(|i| {
-                        ljos_cli::tracker_show_json(i).is_ok_and(|v| ljos_cli::is_decision(&v))
-                    });
+                    let (issue, named) = ljos_cli::subagent_binding(
+                        &input,
+                        &call.cue,
+                        call.session.as_deref(),
+                        false,
+                    );
+                    let decision = named
+                        && issue.as_deref().is_some_and(|i| {
+                            ljos_cli::tracker_show_json(i).is_ok_and(|v| ljos_cli::is_decision(&v))
+                        });
                     if let Some(reason) = ljos_cli::subagent_stop_reason(
                         kind,
                         issue.as_deref(),
                         decision,
+                        named,
                         stop_active,
                     ) {
                         ljos_cli::mark_seen(call.session.as_deref(), &[key]);
@@ -1118,11 +1125,17 @@ fn main() -> Result<()> {
                     if let Some(kind) = subagent.as_deref() {
                         let key = format!("subagent-brief:{agent}");
                         if !ljos_cli::seen_ids(call.session.as_deref()).contains(&key) {
-                            if let Some(issue) = ljos_cli::held_issue() {
+                            let (issue, named) = ljos_cli::subagent_binding(
+                                &input,
+                                &call.cue,
+                                call.session.as_deref(),
+                                false,
+                            );
+                            if let Some(issue) = issue {
                                 let decision = ljos_cli::tracker_show_json(&issue)
                                     .is_ok_and(|v| ljos_cli::is_decision(&v));
                                 ljos_cli::mark_seen(call.session.as_deref(), &[key]);
-                                let brief = ljos_cli::subagent_brief(kind, &issue, decision);
+                                let brief = ljos_cli::subagent_brief(kind, &issue, decision, named);
                                 ctx = if ctx.is_empty() {
                                     brief
                                 } else {
@@ -1158,6 +1171,14 @@ fn main() -> Result<()> {
                         .flatten();
                     if call.event == "UserPromptSubmit" {
                         ljos_cli::store_correction(&call);
+                        if subagent.is_some() {
+                            let _ = ljos_cli::subagent_binding(
+                                &input,
+                                &call.cue,
+                                call.session.as_deref(),
+                                true,
+                            );
+                        }
                     }
                     let (mut ctx, ids) = hook_note(&call, limit);
                     if call.shape == ljos_cli::HookShape::CamelCase

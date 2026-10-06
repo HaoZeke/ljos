@@ -268,8 +268,10 @@ lock exists before proceeding": the next seat cannot act on that.
   true next time is `ljos remember "..." --as NAME`, and a finding is
   `ljos note ISSUE "..."`. NAME is its persona, else its subagent
   type. On a runner that fires subagent events, the hook names the
-  parent's issue on the subagent's first tool result. It keeps the
-  subagent working once at its stop while that issue is open.
+  issue the subagent's task names, or else the newest issue the parent
+  holds. It asks for a ballot, a note, or a stop-gate only when the
+  task names that issue. A task that does not name it must not vote
+  on it.
 
 - Tracker and sync commits queue under `ljos-commit.lock` in the git
   directory, and a commit waits out another git process's `index.lock`.

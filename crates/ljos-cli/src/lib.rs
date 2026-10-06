@@ -3827,7 +3827,8 @@ pub fn held_issue() -> Option<String> {
     }
     // The hold records answer in milliseconds; the tracker walk below takes
     // seconds on a large tracker, past what a runner lets a hook run.
-    if let Some(node) = held_from_records(&holders) {
+    let nodes = held_nodes(&holders);
+    if let Some(node) = nodes.into_iter().next() {
         return Some(node);
     }
     if std::env::var_os("LJOS_IN_HOOK").is_some() {
@@ -3844,38 +3845,168 @@ pub fn held_issue() -> Option<String> {
     })
 }
 
+/// Issues this conversation's hold records name, newest first. File reads
+/// only. A hook uses this instead of the tracker.
+#[must_use]
+pub fn held_issue_ids() -> Vec<String> {
+    let mut holders: Vec<String> = runner_record_holders();
+    let own = holder_name();
+    if !holders.contains(&own) {
+        holders.push(own);
+    }
+    held_nodes(&holders)
+}
+
+/// Whether `task` names `issue` as its own token. A longer id that only
+/// begins with `issue` does not count.
+#[must_use]
+pub fn task_names_issue(task: &str, issue: &str) -> bool {
+    !issue.is_empty()
+        && task
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+            .any(|word| word == issue)
+}
+
+/// Which open issue a subagent is working, and whether its task names that
+/// issue. One named hold wins over a newer hold the task does not mention.
+/// An empty task leaves the newest hold and reports it as named, because
+/// the hook could not see the task and must not drop a real panel gate.
+#[must_use]
+pub fn bind_subagent_issue(task: &str, held_newest_first: &[String]) -> Option<(String, bool)> {
+    let first = held_newest_first.first()?;
+    let named: Vec<&str> = held_newest_first
+        .iter()
+        .filter(|id| task_names_issue(task, id))
+        .map(String::as_str)
+        .collect();
+    if named.len() == 1 {
+        return Some((named[0].to_string(), true));
+    }
+    Some((first.clone(), task.trim().is_empty()))
+}
+
+fn subagent_bind_path(session: &str) -> PathBuf {
+    let safe: String = session
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .collect();
+    runtime_dir().join(format!("subagent-bind-{safe}"))
+}
+
+/// Remember which issue a subagent's own prompt was bound to. Later tool
+/// results and the stop gate read this, so a hook line that names an issue
+/// cannot become the task.
+pub fn remember_subagent_bind(session: &str, issue: &str, named: bool) {
+    if session.is_empty() || issue.is_empty() {
+        return;
+    }
+    let path = subagent_bind_path(session);
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(path, format!("{issue}\n{named}\n"));
+}
+
+/// The binding [`remember_subagent_bind`] stored for this subagent session.
+#[must_use]
+pub fn recall_subagent_bind(session: &str) -> Option<(String, bool)> {
+    let text = std::fs::read_to_string(subagent_bind_path(session)).ok()?;
+    let mut lines = text.lines();
+    let issue = lines.next()?.trim().to_string();
+    if issue.is_empty() {
+        return None;
+    }
+    let named = lines.next().is_some_and(|l| l.trim() == "true");
+    Some((issue, named))
+}
+
+/// Prompt text a hook payload carries. Tool commands are not the task.
+#[must_use]
+pub fn subagent_task_from_hook(input: &str, cue: &str) -> String {
+    let mut parts = vec![cue.to_string()];
+    if let Ok(v) = serde_json::from_str::<Value>(input.trim()) {
+        for key in ["prompt", "task", "description"] {
+            if let Some(text) = v[key].as_str() {
+                parts.push(text.to_string());
+            }
+        }
+    }
+    parts.join("\n")
+}
+
+/// The issue a subagent is bound to, and whether its task names that issue.
+/// A stored prompt binding wins. A later event with no store does not treat
+/// its tool command as the task, and does not demand a ballot.
+#[must_use]
+pub fn subagent_binding(
+    input: &str,
+    cue: &str,
+    session: Option<&str>,
+    from_prompt: bool,
+) -> (Option<String>, bool) {
+    if let Some(session) = session.filter(|s| !s.is_empty()) {
+        if let Some(saved) = recall_subagent_bind(session) {
+            return (Some(saved.0), saved.1);
+        }
+    }
+    let held = held_issue_ids();
+    if !from_prompt {
+        return (held.into_iter().next(), false);
+    }
+    let task = subagent_task_from_hook(input, cue);
+    let bound = bind_subagent_issue(&task, &held);
+    if let (Some(session), Some((issue, named))) = (session, bound.as_ref()) {
+        remember_subagent_bind(session, issue, *named);
+    }
+    match bound {
+        Some((issue, named)) => (Some(issue), named),
+        None => (None, false),
+    }
+}
+
 /// What a subagent is told on its first tool result: the issue its parent
 /// holds and how its result joins it. A subagent that is not told the
 /// issue cannot cast a ballot on it, and a sitting of its own would
-/// contend with its parent's.
+/// contend with its parent's. `named` is false when the task text does
+/// not name `issue`: the parent holds other issues, and a ballot on this
+/// one would be a vote the task did not ask for.
 #[must_use]
-pub fn subagent_brief(kind: &str, issue: &str, decision: bool) -> String {
-    let judge = if decision {
+pub fn subagent_brief(kind: &str, issue: &str, decision: bool, named: bool) -> String {
+    let judge = if !named {
+        format!("This task does not name {issue}. Do not vote, note, or sit on it.")
+    } else if decision {
         format!("{issue} is a decision: end with your ballot, `ljos vote {issue} --for OPTION --expect OPTION --as ROLE`.")
     } else {
         format!(
             "A judgement between options is a ballot: `ljos vote {issue} --for OPTION --expect OPTION --as ROLE`."
         )
     };
+    let finding = if named {
+        format!("a finding is `ljos note {issue} \"...\"`. ")
+    } else {
+        String::new()
+    };
     format!(
         "You are a subagent ({kind}) working under {issue}, which your parent holds. Do not open a sitting \
-         on it. {judge} A lesson that will hold next time is `ljos remember \"...\" --as ROLE`; a \
-         finding is `ljos note {issue} \"...\"`. ROLE is a persona from `ljos personas` when one fits \
+         on it. {judge} A lesson that will hold next time is `ljos remember \"...\" --as ROLE`; {finding}ROLE is a persona from `ljos personas` when one fits \
          your task, else `{kind}`."
     )
 }
 
-/// The stop gate for a subagent: once, when its parent holds an issue,
-/// the reason the subagent is kept working one more round. A gate that
-/// already held it this turn, or a parent holding nothing, lets it stop.
+/// The stop gate for a subagent: once, when its task names the issue its
+/// parent holds, the reason the subagent is kept working one more round.
+/// A gate that already held it this turn, a parent holding nothing, or a
+/// task that does not name the issue, lets it stop. Holding it to vote on
+/// an issue the task did not name records a ballot on the wrong decision.
 #[must_use]
 pub fn subagent_stop_reason(
     kind: &str,
     issue: Option<&str>,
     decision: bool,
+    named: bool,
     active: bool,
 ) -> Option<String> {
-    if active {
+    if active || !named {
         return None;
     }
     let issue = issue?;
@@ -4034,10 +4165,7 @@ fn correction_nudge_as(call: &HookCall, verdict: Option<bool>) -> Option<(String
 #[must_use]
 pub fn correction_cue(text: &str) -> Option<&'static str> {
     let lower = text.to_lowercase();
-    CORRECTION_CUES
-        .iter()
-        .find(|c| lower.contains(*c))
-        .copied()
+    CORRECTION_CUES.iter().find(|c| lower.contains(*c)).copied()
 }
 
 /// Write a correction into the pack. The model on a runner whose pack
@@ -11201,6 +11329,11 @@ fn held_from_records(holders: &[String]) -> Option<String> {
     held_from_records_in(holders, &runtime_dir(), &own_ancestry())
 }
 
+/// Every issue this conversation's hold records name, newest first.
+fn held_nodes(holders: &[String]) -> Vec<String> {
+    held_nodes_in(holders, &runtime_dir(), &own_ancestry())
+}
+
 /// [`held_from_records`] over one directory and one chain of ancestors. A
 /// record whose process is a session process names every conversation
 /// under that multiplexer, so it names none of them.
@@ -11209,9 +11342,22 @@ fn held_from_records_in(
     dir: &std::path::Path,
     chain: &[(u32, String)],
 ) -> Option<String> {
+    held_nodes_in(holders, dir, chain).into_iter().next()
+}
+
+/// Matching hold records as issue ids, newest first. Same match as
+/// [`held_from_records_in`].
+fn held_nodes_in(
+    holders: &[String],
+    dir: &std::path::Path,
+    chain: &[(u32, String)],
+) -> Vec<String> {
     let pids: Vec<String> = chain.iter().map(|(p, _)| p.to_string()).collect();
-    let mut best: Option<(String, String)> = None;
-    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+    let mut rows: Vec<(String, String)> = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return rows;
+    };
+    for entry in entries.flatten() {
         if !entry.file_name().to_string_lossy().starts_with("hold-") {
             continue;
         }
@@ -11230,11 +11376,12 @@ fn held_from_records_in(
         };
         let by_process = !is_session(comm) && pids.iter().any(|p| p == pid);
         let ours = holders.iter().any(|h| h == holder) || by_process;
-        if ours && !node.is_empty() && best.as_ref().is_none_or(|(t, _)| *at > t.as_str()) {
-            best = Some(((*at).to_string(), (*node).to_string()));
+        if ours && !node.is_empty() {
+            rows.push(((*at).to_string(), (*node).to_string()));
         }
     }
-    best.map(|(_, node)| node)
+    rows.sort_by(|a, b| b.0.cmp(&a.0));
+    rows.into_iter().map(|(_, node)| node).collect()
 }
 
 fn drop_hold(actor: &str) {
@@ -14495,29 +14642,57 @@ mod tests {
             (Some("review".into()), true, "a1".into())
         );
         assert_eq!(hook_subagent(r#"{"hook_event_name":"Stop"}"#).0, None);
-        let brief = subagent_brief("explore", "acme-12ab", true);
+        let brief = subagent_brief("explore", "acme-12ab", true, true);
         assert!(
             brief.contains("Do not open a sitting")
                 && brief.contains("ljos vote acme-12ab")
                 && brief.contains("--expect"),
             "{brief}"
         );
-        let decide = subagent_stop_reason("explore", Some("acme-12ab"), true, false).unwrap();
+        let unnamed = subagent_brief("general-purpose", "acme-12ab", true, false);
+        assert!(
+            unnamed.contains("does not name acme-12ab") && !unnamed.contains("ljos vote"),
+            "{unnamed}"
+        );
+        let decide = subagent_stop_reason("explore", Some("acme-12ab"), true, true, false).unwrap();
         assert!(
             decide.contains("decision")
                 && decide.contains("--expect")
                 && decide.contains("--as ROLE"),
             "{decide}"
         );
-        let plain = subagent_stop_reason("explore", Some("acme-12ab"), false, false).unwrap();
+        let plain = subagent_stop_reason("explore", Some("acme-12ab"), false, true, false).unwrap();
         assert!(plain.contains("Otherwise stop"), "{plain}");
         assert!(
-            subagent_stop_reason("explore", Some("acme-12ab"), true, true).is_none(),
+            subagent_stop_reason("explore", Some("acme-12ab"), true, true, true).is_none(),
             "held once"
         );
         assert!(
-            subagent_stop_reason("explore", None, true, false).is_none(),
+            subagent_stop_reason("explore", Some("acme-12ab"), true, false, false).is_none(),
+            "a task that does not name the issue is not held to vote"
+        );
+        assert!(
+            subagent_stop_reason("explore", None, true, true, false).is_none(),
             "no issue, no gate"
+        );
+        let held = [
+            "teachxai-scicode-puql".to_string(),
+            "teachxai-scicode-51ui".to_string(),
+        ];
+        assert_eq!(
+            bind_subagent_issue("Edit only the Boys problem. Do not sit.", &held),
+            Some(("teachxai-scicode-puql".to_string(), false))
+        );
+        assert_eq!(
+            bind_subagent_issue(
+                "Ballot teachxai-scicode-51ui. ljos vote teachxai-scicode-51ui --for B",
+                &held
+            ),
+            Some(("teachxai-scicode-51ui".to_string(), true))
+        );
+        assert_eq!(
+            bind_subagent_issue("", &held),
+            Some(("teachxai-scicode-puql".to_string(), true))
         );
     }
 
@@ -15662,10 +15837,7 @@ mod tests {
             .find(|p| p.name == "company-panel")
             .unwrap();
         let panel = format_playbook_copy(&panel_pb);
-        assert!(
-            panel.contains("Do not set a model id"),
-            "{panel}"
-        );
+        assert!(panel.contains("Do not set a model id"), "{panel}");
         assert!(
             !panel.contains("spawn hints"),
             "a company panel names no model family: {panel}"
