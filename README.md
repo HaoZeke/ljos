@@ -34,6 +34,11 @@ A preference stands from the moment it is written. A lesson (`ljos remember`)
 comes back once a review or a consolidation promotes it; `ljos due` lists the
 ones waiting.
 
+A conversation that holds no issue is told, on the first tool result, to
+file one and sit. `Stop` holds that turn once when it used tools and never
+touched the seat. A conversation that already holds an issue waits forty
+tool calls before the reminder to record the work.
+
 ## Claude Code plugin
 
 The MCP server, the seat protocol skill, the sitting and finish commands, and

@@ -3,7 +3,10 @@ The pack only helps a Grok session if it reaches the model.
 Grok discards ``UserPromptSubmit`` stdout. It delivers ``PostToolUse``
 ``additionalContext`` after the first tool. ``ljos hook`` searches on the
 prompt, holds the text, and emits it once on ``PostToolUse``.
-``PreToolUse`` is TCB and pack rules; a deny blocks. There is no ``sync.sh``.
+A conversation that holds no issue is told, on that first result, to
+file one and sit. ``Stop`` holds such a turn once when it used tools and
+never touched the seat. ``PreToolUse`` is TCB and pack rules; a deny
+blocks. There is no ``sync.sh``.
 
 Install
 =======
@@ -24,14 +27,11 @@ server; a session restart is not required.
 Why these events
 ================
 
-==================== ================================= ==========================
-Event                What ``ljos hook`` does           What Grok does with stdout
-==================== ================================= ==========================
-``UserPromptSubmit`` searches, holds the text          discarded
-``PostToolUse``      emits the held text once          delivered after the tool
-``PreToolUse``       TCB and pack rules; a deny blocks a turn has many tool calls
-``SessionEnd``       fires injected memories           ignored
-==================== ================================= ==========================
+- ``UserPromptSubmit`` searches and holds the text. Grok discards the stdout.
+- ``PostToolUse`` emits the held text once. With no issue held, the first result says to file and sit. Grok delivers that after the tool.
+- ``PreToolUse`` applies the TCB and pack rules. A deny blocks. A turn has many tool calls.
+- ``Stop`` holds one turn that used tools and never touched the seat, when the conversation holds no issue. Grok continues that turn once.
+- ``SessionEnd`` fires the injected memories. Grok ignores the stdout.
 
 The frozen file is `crates/ljos-cli/assets/grok/ljos.json <../../crates/ljos-cli/assets/grok/ljos.json>`__.
 Its ``{ljos}`` is filled in at onboard. ``PreToolUse`` gets 10 seconds, the

@@ -3054,6 +3054,10 @@ pub struct StopTurn {
     pub test_ran: bool,
     pub outputs: Vec<String>,
     pub final_message: String,
+    /// A tool ran after the person's last request.
+    pub used_tool: bool,
+    /// A tool after that request named the seat.
+    pub touched_seat: bool,
 }
 
 fn tail_chars(s: &str, n: usize) -> String {
@@ -3073,47 +3077,106 @@ fn block_text(content: &Value) -> String {
     }
 }
 
-/// Read a JSONL transcript of `user` and
-/// `assistant` entries whose `message.content` is text or blocks
-/// (`text`, `tool_use`, `tool_result`).
+/// The text of one transcript entry: Claude puts it under `message.content`,
+/// and a runner that records `tool_calls` puts it under `content`.
+fn entry_text(e: &Value) -> String {
+    let nested = block_text(&e["message"]["content"]);
+    if !nested.is_empty() {
+        return nested;
+    }
+    match &e["content"] {
+        Value::String(s) => s.clone(),
+        Value::Array(parts) => parts
+            .iter()
+            .filter_map(|p| p["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
+/// Whether this entry is the person's request, not a tool result and not a
+/// synthetic note. Both transcript shapes count.
+fn is_user_prompt(e: &Value) -> bool {
+    if e["type"] != "user"
+        || e["isMeta"].as_bool().unwrap_or(false)
+        || e.get("synthetic_reason").is_some()
+    {
+        return false;
+    }
+    let content = if !e["message"]["content"].is_null() {
+        &e["message"]["content"]
+    } else {
+        &e["content"]
+    };
+    match content {
+        Value::String(t) => !t.trim_start().starts_with('<'),
+        Value::Array(parts) => {
+            parts
+                .iter()
+                .any(|p| p["type"] == "text" || p.get("text").is_some())
+                && !parts.iter().any(|p| p["type"] == "tool_result")
+        }
+        _ => false,
+    }
+}
+
+/// A tool call the transcript names at the top level: `name` and `arguments`.
+fn record_tool_call(turn: &mut StopTurn, name: &str, arguments: &str) {
+    turn.used_tool = true;
+    if touches_seat(&format!("{name} {arguments}")) {
+        turn.touched_seat = true;
+    }
+    let Ok(args) = serde_json::from_str::<Value>(arguments) else {
+        return;
+    };
+    if let Some(cmd) = args["command"].as_str() {
+        let cmd: String = cmd.chars().take(200).collect();
+        turn.test_ran |= runs_tests(&cmd);
+        turn.commands.push(cmd);
+    }
+}
+
+/// Read a JSONL transcript. One shape stores `message.content` blocks
+/// (`text`, `tool_use`, `tool_result`). The other stores `content` and a
+/// top-level `tool_calls` list of `name` and `arguments`.
 #[must_use]
 pub fn stop_turn_from_transcript(text: &str) -> StopTurn {
     let entries: Vec<Value> = text
         .lines()
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
         .collect();
-    let is_prompt = |e: &Value| {
-        e["type"] == "user"
-            && !e["isMeta"].as_bool().unwrap_or(false)
-            && match &e["message"]["content"] {
-                Value::String(t) => !t.trim_start().starts_with('<'),
-                Value::Array(parts) => {
-                    parts.iter().any(|p| p["type"] == "text")
-                        && !parts.iter().any(|p| p["type"] == "tool_result")
-                }
-                _ => false,
-            }
-    };
-    let start = entries.iter().rposition(is_prompt).unwrap_or(0);
+    let start = entries.iter().rposition(is_user_prompt).unwrap_or(0);
     let mut turn = StopTurn {
-        request: entries
-            .get(start)
-            .map(|e| block_text(&e["message"]["content"]))
-            .unwrap_or_default(),
+        request: entries.get(start).map(entry_text).unwrap_or_default(),
         ..StopTurn::default()
     };
     let mut pending: std::collections::BTreeMap<String, String> = Default::default();
     let mut outputs: Vec<(bool, String)> = Vec::new();
     for e in entries.iter().skip(start + 1) {
+        if let Some(calls) = e.get("tool_calls").and_then(Value::as_array) {
+            for call in calls {
+                let name = call["name"].as_str().unwrap_or("");
+                let arguments = call["arguments"].as_str().unwrap_or("");
+                record_tool_call(&mut turn, name, arguments);
+            }
+        }
         let Value::Array(parts) = &e["message"]["content"] else {
-            if e["type"] == "assistant" {
-                turn.final_message = block_text(&e["message"]["content"]);
+            let text = entry_text(e);
+            if e["type"] == "assistant" && !text.is_empty() {
+                turn.final_message = text;
             }
             continue;
         };
         for part in parts {
             match part["type"].as_str() {
                 Some("tool_use") => {
+                    turn.used_tool = true;
+                    let name = part["name"].as_str().unwrap_or("");
+                    let cmd = part["input"]["command"].as_str().unwrap_or("");
+                    if touches_seat(&format!("{name} {cmd}")) {
+                        turn.touched_seat = true;
+                    }
                     if let Some(cmd) = part["input"]["command"].as_str() {
                         let cmd: String = cmd.chars().take(200).collect();
                         if let Some(id) = part["id"].as_str() {
@@ -3196,6 +3259,36 @@ pub fn stop_audit(input: &str, stop_active: bool) -> Option<String> {
     }
     let a = jev::audit(&turn.state())?;
     jev::audit_reason(&a, turn.test_ran)
+}
+
+/// Why a turn that used tools and holds no issue is held for one more
+/// round. A subagent is left to its brief. A turn that already touched
+/// the seat, or a conversation that already holds an issue, stops.
+/// `None` lets the turn end. The second stop of the same turn is not held.
+#[must_use]
+pub fn seat_stop_reason(input: &str, stop_active: bool, subagent: bool) -> Option<String> {
+    if stop_active || subagent {
+        return None;
+    }
+    if held_issue().is_some() {
+        return None;
+    }
+    let v: Value = serde_json::from_str(input.trim()).ok()?;
+    let path = v["transcript_path"]
+        .as_str()
+        .or_else(|| v["transcriptPath"].as_str())?;
+    let turn = std::fs::read_to_string(path)
+        .ok()
+        .map(|t| stop_turn_from_transcript(&t))?;
+    if !turn.used_tool || turn.touched_seat {
+        return None;
+    }
+    Some(
+        "This conversation holds no issue, and this turn used tools without touching the seat. \
+         Work goes on an issue: `ljos file \"TITLE\" -p PROJECT --top` prints an id, then \
+         `ljos sitting ID` opens it."
+            .into(),
+    )
 }
 
 /// The id of the runner's notice that its usage limit is reached, when the
@@ -15463,7 +15556,61 @@ mod tests {
         assert!(t.outputs[0].contains("1 failed"));
         assert_eq!(t.final_message, "All done, the parser works.");
         assert!(t.state().contains("The agent's final message:\nAll done"));
+        assert!(t.used_tool);
+        assert!(!t.touched_seat);
         assert!(!runs_tests("git status"));
+    }
+
+    #[test]
+    fn a_tool_call_list_is_the_turn_and_a_seat_tool_is_a_touch() {
+        let lines = [
+            r#"{"type":"user","content":[{"type":"text","text":"fix the parser"}]}"#,
+            r#"{"type":"assistant","content":"","tool_calls":[{"id":"c1","name":"run_terminal_command","arguments":"{\"command\":\"cargo test -p brio\"}"}]}"#,
+            r#"{"type":"tool_result","tool_call_id":"c1","content":"FAILED"}"#,
+            r#"{"type":"assistant","content":"Still working.","tool_calls":[{"id":"c2","name":"use_tool","arguments":"{\"tool_name\":\"ljos__ljos_sitting\"}"}]}"#,
+        ]
+        .join("\n");
+        let open = stop_turn_from_transcript(&lines.lines().take(2).collect::<Vec<_>>().join("\n"));
+        assert_eq!(open.request, "fix the parser");
+        assert!(open.used_tool);
+        assert!(!open.touched_seat);
+        assert_eq!(open.commands, vec!["cargo test -p brio"]);
+        assert!(open.test_ran);
+        let sat = stop_turn_from_transcript(&lines);
+        assert!(sat.touched_seat);
+        assert_eq!(sat.final_message, "Still working.");
+    }
+
+    #[test]
+    fn an_open_turn_that_used_tools_is_held_once() {
+        let _g = env_guard();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", dir.path()) };
+        unsafe { std::env::set_var("LJOS_IN_HOOK", "1") };
+        let transcript = dir.path().join("chat.jsonl");
+        std::fs::write(
+            &transcript,
+            "{\"type\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"fix it\"}]}\n\
+             {\"type\":\"assistant\",\"content\":\"\",\"tool_calls\":[{\"name\":\"read_file\",\"arguments\":\"{}\"}]}\n",
+        )
+        .unwrap();
+        let input = format!(
+            r#"{{"transcriptPath":"{}","stopHookActive":false}}"#,
+            transcript.display()
+        );
+        let reason = seat_stop_reason(&input, false, false).expect("held");
+        assert!(reason.contains("ljos sitting"), "{reason}");
+        assert!(seat_stop_reason(&input, true, false).is_none());
+        assert!(seat_stop_reason(&input, false, true).is_none());
+        std::fs::write(
+            &transcript,
+            "{\"type\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"fix it\"}]}\n\
+             {\"type\":\"assistant\",\"content\":\"\",\"tool_calls\":[{\"name\":\"use_tool\",\"arguments\":\"{\\\"tool_name\\\":\\\"ljos__ljos_file\\\"}\"}]}\n",
+        )
+        .unwrap();
+        assert!(seat_stop_reason(&input, false, false).is_none());
+        unsafe { std::env::remove_var("LJOS_IN_HOOK") };
+        unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
     }
 
     #[test]
@@ -17707,5 +17854,64 @@ mod tests {
             .to_string()
         )
         .is_err());
+    }
+
+    /// A project whose board was split keeps new issues in `issues/<id>.org`.
+    /// The lookup reads that file. Copying the heading back onto `issues.org`
+    /// is not the record.
+    #[test]
+    fn a_ledger_file_is_the_issue_when_the_board_lacks_it() {
+        let _g = env_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let issues = root.join("Software").join("demo").join("issues");
+        std::fs::create_dir_all(&issues).unwrap();
+        std::fs::write(
+            root.join("Software").join("demo").join("issues.org"),
+            "#+TITLE: demo issues\n#+VISSUE: 1\n#+TODO: TODO | DONE\n",
+        )
+        .unwrap();
+        std::fs::write(issues.join(".ledger"), "").unwrap();
+        std::fs::write(
+            issues.join("demo-abcd.org"),
+            "#+TITLE: demo issues\n\
+             #+VISSUE: 1\n\
+             #+TODO: TODO | DONE\n\
+             #+VISSUE_LEDGER:\n\
+             #+VISSUE_LINES: 6 10\n\
+             * TODO [#C] ledger only\n\
+             :PROPERTIES:\n\
+             :ID:         demo-abcd\n\
+             :CREATED:    [2026-10-05 Mon]\n\
+             :END:\n\
+             \n\
+             The board does not carry this heading.\n",
+        )
+        .unwrap();
+        let prev_root = std::env::var_os("VISSUE_ROOT");
+        let prev_prefix = std::env::var_os("VISSUE_PREFIX");
+        let prev_route = std::env::var_os("VISSUE_NO_ROUTE");
+        unsafe {
+            std::env::set_var("VISSUE_ROOT", root);
+            std::env::set_var("VISSUE_PREFIX", "Software");
+            std::env::set_var("VISSUE_NO_ROUTE", "1");
+        }
+        let shown = tracker_show_json("demo-abcd");
+        unsafe {
+            match prev_root {
+                Some(v) => std::env::set_var("VISSUE_ROOT", v),
+                None => std::env::remove_var("VISSUE_ROOT"),
+            }
+            match prev_prefix {
+                Some(v) => std::env::set_var("VISSUE_PREFIX", v),
+                None => std::env::remove_var("VISSUE_PREFIX"),
+            }
+            match prev_route {
+                Some(v) => std::env::set_var("VISSUE_NO_ROUTE", v),
+                None => std::env::remove_var("VISSUE_NO_ROUTE"),
+            }
+        }
+        let shown = shown.expect("ledger issue");
+        assert_eq!(shown["title"].as_str(), Some("ledger only"));
     }
 }

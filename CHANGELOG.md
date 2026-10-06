@@ -4,12 +4,17 @@ Versions follow semver at 0.x: a minor bump is a feature, a patch is a fix.
 
 ## Unreleased
 
-- A conversation that holds no issue is told to file one and sit on the first tool result. A conversation that already holds an issue still waits forty tool calls before the reminder to record the work.
 - An ask a runner cannot show as its own prompt is granted by the client's consent form (`ljos_request_approval`), by replying `approve ID` in the same conversation, or by `ljos approve ID` in a terminal.
 - A background tracker push stays visible to doctor after ljos exits. The log name remains the ljos pid. The push shell pid is written beside it, and the row stays healthy while that shell or a git child of it is alive.
 - An ignored tracker file is reported with the ignore rule that keeps it out of the commit. A clean tracked file still reports nothing to commit.
 - Grok Build receives an ask rule as `ask` on `decision` and `permissionDecision`, and shows its in-chat permission prompt. A runner that cannot ask still has the ask rewritten to a deny, with a one-use request id.
 - Claude Code installs the seat from the leidarljos marketplace in this repository. `claude plugin marketplace add leidarljos/ljos`, then `claude plugin install ljos@leidarljos` for the MCP server, the seat protocol skill, the sitting and finish commands, and the hooks `ljos onboard --harness claude` registers. `claude plugin install vissue@leidarljos` fetches the tracker server from leidarljos/vissue.
+
+## 0.25.0 (2026-10-06)
+
+- A conversation that holds no issue is told to file one and sit on the first tool result. A conversation that already holds an issue still waits forty tool calls before the reminder to record the work.
+- `Stop` holds that open conversation once when the turn used tools and never touched the seat. The transcript reader takes a top-level `tool_calls` list as well as `message.content` blocks.
+- An issue that lives only in `issues/<id>.org` is the issue the seat reads. The seat links vissue-core 0.20, which folds that ledger.
 
 ## 0.24.3 (2026-10-04)
 

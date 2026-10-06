@@ -466,6 +466,11 @@ Every Jev answer goes to ``$XDG_STATE_HOME/ljos/jev-log.jsonl``. ``ljos learn`` 
 Hold a done claim beside a red test
 ===================================
 
+``Stop`` also holds one turn, with no model in the loop, when the
+conversation holds no issue and the turn used tools without touching
+the seat. The agent is told to file an issue and sit. The next stop of
+that same turn is not held.
+
 With Jev on, the ``Stop`` and ``SubagentStop`` hooks audit the turn once
 before the agent stops. The state holds four parts, bounded to a few
 thousand tokens:

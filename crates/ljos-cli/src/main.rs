@@ -1007,6 +1007,12 @@ fn main() -> Result<()> {
                     println!("{}", ljos_cli::block_output(call.shape, &reason));
                     return Ok(());
                 }
+                if let Some(reason) =
+                    ljos_cli::seat_stop_reason(&input, stop_active, subagent.is_some())
+                {
+                    println!("{}", ljos_cli::block_output(call.shape, &reason));
+                    return Ok(());
+                }
                 if let Some(reason) = ljos_cli::stop_audit(&input, stop_active) {
                     println!("{}", ljos_cli::block_output(call.shape, &reason));
                     return Ok(());

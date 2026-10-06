@@ -119,7 +119,7 @@ stdin is an argv line and answered in plain lines.
 | =SessionEnd= | fires the memories injected during the session together and clears the session's record |
 | =PostToolUse= | emits the held prompt note once, on the first tool result, for a runner that discards prompt-hook stdout (grok delivers this event) |
 | =PreToolUse= | applies the TCB and pack rules to the command (matcher =Bash=); a deny blocks |
-| =Stop= | speaks only when the turn ran no tool; with Jev on, audits the turn once from the runner's transcript |
+| =Stop= | speaks only when the turn ran no tool; with no issue held, holds one turn that used tools and never touched the seat; with Jev on, audits the turn once from the runner's transcript |
 | =SubagentStop= | names the issue the subagent's conversation holds and asks for the ballot on a decision; with Jev on, audits the turn once |
 
 * Push gate

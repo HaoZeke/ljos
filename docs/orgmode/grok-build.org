@@ -6,7 +6,10 @@ The pack only helps a Grok session if it reaches the model.
 Grok discards =UserPromptSubmit= stdout. It delivers =PostToolUse=
 =additionalContext= after the first tool. =ljos hook= searches on the
 prompt, holds the text, and emits it once on =PostToolUse=.
-=PreToolUse= is TCB and pack rules; a deny blocks. There is no =sync.sh=.
+A conversation that holds no issue is told, on that first result, to
+file one and sit. =Stop= holds such a turn once when it used tools and
+never touched the seat. =PreToolUse= is TCB and pack rules; a deny
+blocks. There is no =sync.sh=.
 
 * Install
 
@@ -28,8 +31,9 @@ server; a session restart is not required.
 | Event | What =ljos hook= does | What Grok does with stdout |
 |-------+------------------------+----------------------------|
 | =UserPromptSubmit= | searches, holds the text | discarded |
-| =PostToolUse= | emits the held text once | delivered after the tool |
+| =PostToolUse= | emits the held text once; with no issue held, the first result says to file and sit | delivered after the tool |
 | =PreToolUse= | TCB and pack rules; a deny blocks | a turn has many tool calls |
+| =Stop= | with no issue held, holds one turn that used tools and never touched the seat | =decision= =block= continues the turn once |
 | =SessionEnd= | fires injected memories | ignored |
 
 The frozen file is [[file:../../crates/ljos-cli/assets/grok/ljos.json][crates/ljos-cli/assets/grok/ljos.json]].

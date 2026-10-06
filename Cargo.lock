@@ -2551,7 +2551,7 @@ checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
 name = "ljos"
-version = "0.24.3"
+version = "0.25.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2573,7 +2573,7 @@ dependencies = [
 
 [[package]]
 name = "ljos-hud"
-version = "0.24.3"
+version = "0.25.0"
 dependencies = [
  "anyhow",
  "claimdag",
@@ -5305,9 +5305,9 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vissue-core"
-version = "0.16.1"
+version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c50785a659df56f2efea0f7f9265f73451fc084b0b6f25b62b9e469c39c5303"
+checksum = "0c4db22f2c47705bbb393932276a84eb0c442d582a1c73326457ae23956cdae4"
 dependencies = [
  "anyhow",
  "capnp 0.27.2",
