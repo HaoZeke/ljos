@@ -11355,7 +11355,7 @@ fn held_nodes_in(
     let pids: Vec<String> = chain.iter().map(|(p, _)| p.to_string()).collect();
     let mut rows: Vec<(String, String)> = Vec::new();
     let Ok(entries) = std::fs::read_dir(dir) else {
-        return rows;
+        return Vec::new();
     };
     for entry in entries.flatten() {
         if !entry.file_name().to_string_lossy().starts_with("hold-") {
